@@ -132,7 +132,9 @@ class MainWindow(QMainWindow):
         self._add_action(compute_menu, "&Meanline Design...", self._run_meanline)
         compute_menu.addSeparator()
         self._add_action(compute_menu, "Compute &Blade Geometry", self._compute_blade)
-        self._add_action(compute_menu, "Generate &SCM Mesh", self._compute_scm_mesh)
+        self._add_action(compute_menu, "Generate Blade &Array (Full Annulus)", self._generate_blade_array)
+        self._add_action(compute_menu, "Generate &SCM Mesh (S2m)", self._compute_scm_mesh)
+        self._add_action(compute_menu, "Generate S&1 Mesh (Blade-to-Blade)", self._compute_s1_mesh)
         self._add_action(compute_menu, "Generate &O-Grid Mesh", self._compute_ogrid_mesh)
         self._add_action(compute_menu, "Generate Multi-&Block Mesh", self._compute_multiblock_mesh)
         compute_menu.addSeparator()
@@ -539,6 +541,73 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             QMessageBox.warning(self, "Compute Error", f"{e}\n\n{traceback.format_exc()}")
+
+    def _generate_blade_array(self) -> None:
+        """Generate full annular blade array."""
+        if self._current_row is None or self._current_row.profiles_3d is None:
+            QMessageBox.warning(
+                self, "No Blade",
+                "Compute blade geometry first (Compute > Compute Blade Geometry)."
+            )
+            return
+
+        try:
+            from ..blade import generate_blade_array_flat
+
+            all_points = generate_blade_array_flat(
+                self._current_row.profiles_3d,
+                self._current_row.number_blades,
+            )
+
+            n_blades = self._current_row.number_blades
+            n_points = len(all_points)
+
+            # Display in 3D viewer
+            self._point_cloud_viewer.set_points(all_points)
+            self._tabs.setCurrentWidget(self._point_cloud_viewer)
+
+            self.statusBar().showMessage(
+                f"Blade array: {n_blades} blades, {n_points:,} total points"
+            )
+            QMessageBox.information(
+                self, "Blade Array Generated",
+                f"Full annular array created.\n\n"
+                f"Blades: {n_blades}\n"
+                f"Total points: {n_points:,}\n\n"
+                f"Displayed in 3D Viewer tab."
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"{e}\n\n{traceback.format_exc()}")
+
+    def _compute_s1_mesh(self) -> None:
+        """Generate S1 blade-to-blade mesh."""
+        if self._current_row is None or not self._current_row.profiles:
+            QMessageBox.warning(self, "No Profile", "Create a profile first.")
+            return
+
+        try:
+            from ..mesh import S1Mesher, S1MeshConfig, mesh_quality_report
+
+            profile = self._current_row.profiles[0].as_array()
+            pitch = 2 * np.pi * 0.15 / max(self._current_row.number_blades, 1)
+
+            config = S1MeshConfig(
+                n_streamwise=self._mesh_panel._n_axial.value(),
+                n_pitchwise=self._mesh_panel._n_radial.value(),
+            )
+            mesher = S1Mesher(config)
+            blocks = mesher.generate(profile, pitch=pitch)
+
+            total_cells = mesher.total_cells()
+            report = mesh_quality_report(blocks[0].points)
+            report["n_cells"] = total_cells
+            self._mesh_panel.show_quality_report(report)
+
+            self.statusBar().showMessage(
+                f"S1 mesh: {len(blocks)} blocks, {total_cells} cells"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "S1 Mesh Error", f"{e}\n\n{traceback.format_exc()}")
 
     def _compute_scm_mesh(self) -> None:
         if self._current_row is None:

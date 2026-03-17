@@ -10,10 +10,12 @@ Provides structured mesh generation for turbomachinery:
   - vertex_extraction: Block topology builder from profiles
   - multiblock: Multi-block structured mesh generator (GridZ replacement)
   - multistage: Multi-row rotor+stator mesh orchestration
+  - s1_mesher: S1 blade-to-blade surface mesh
 """
 
 from .transfinite import tfi_2d, tfi_2d_vectorized, tfi_2d_graded, apply_grading
 from .scm_mesher import SCMMesher, SCMMeshConfig
+from .s1_mesher import S1Mesher, S1MeshConfig
 from .ogrid import OGridGenerator, OGridMesh, OGridMeshConfig
 from .quality import (
     compute_aspect_ratio,

@@ -288,6 +288,64 @@ _register(
 
 
 # ──────────────────────────────────────────────────────
+# 6b. S1 blade-to-blade mesh
+# ──────────────────────────────────────────────────────
+
+_register(
+    "generate_s1_mesh",
+    "Generate a 2D structured mesh on the S1 (blade-to-blade) surface at a "
+    "given radius. Used for 2D cascade CFD simulations.",
+    {
+        "type": "object",
+        "properties": {
+            "profile_path": {
+                "type": "string",
+                "description": "Path to profile CSV file",
+            },
+            "pitch": {
+                "type": "number",
+                "description": "Blade pitch in meters (default 0.05)",
+            },
+            "n_streamwise": {
+                "type": "integer",
+                "description": "Streamwise cells (default 40)",
+            },
+            "n_pitchwise": {
+                "type": "integer",
+                "description": "Pitchwise cells (default 30)",
+            },
+            "stagger_angle_deg": {
+                "type": "number",
+                "description": "Stagger angle in degrees (default 0)",
+            },
+        },
+        "required": ["profile_path"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
+# 6c. Blade annular array
+# ──────────────────────────────────────────────────────
+
+_register(
+    "generate_blade_array",
+    "Generate a full annular array of blades by replicating one blade passage "
+    "around the circumference. Returns total point count.",
+    {
+        "type": "object",
+        "properties": {
+            "number_blades": {
+                "type": "integer",
+                "description": "Number of blades in the row",
+            },
+        },
+        "required": ["number_blades"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
 # 7. File inspection
 # ──────────────────────────────────────────────────────
 
@@ -357,6 +415,10 @@ def execute_tool(name: str, inputs: dict) -> str:
             return _exec_fea(inputs)
         elif name == "yplus_calculator":
             return _exec_yplus(inputs)
+        elif name == "generate_s1_mesh":
+            return _exec_s1_mesh(inputs)
+        elif name == "generate_blade_array":
+            return _exec_blade_array(inputs)
         elif name == "inspect_file":
             return _exec_inspect(inputs)
         elif name == "list_materials":
@@ -531,6 +593,42 @@ def _exec_yplus(inputs: dict) -> str:
             f"  Target y+: {target}\n"
             f"  Required first cell: {dy*1e6:.1f} um ({dy*1000:.4f} mm)\n"
         )
+
+
+def _exec_s1_mesh(inputs: dict) -> str:
+    from astraturbo.mesh import S1Mesher, S1MeshConfig
+
+    profile = np.loadtxt(inputs["profile_path"], delimiter=",", skiprows=1)[:, :2]
+    pitch = inputs.get("pitch", 0.05)
+    stagger = math.radians(inputs.get("stagger_angle_deg", 0))
+
+    config = S1MeshConfig(
+        n_streamwise=inputs.get("n_streamwise", 40),
+        n_pitchwise=inputs.get("n_pitchwise", 30),
+    )
+    mesher = S1Mesher(config)
+    blocks = mesher.generate(profile, pitch=pitch, stagger_angle=stagger)
+
+    return (
+        f"S1 blade-to-blade mesh generated:\n"
+        f"  Blocks: {len(blocks)}\n"
+        f"  Total cells: {mesher.total_cells()}\n"
+        f"  Pitch: {pitch} m\n"
+        f"  Stagger: {inputs.get('stagger_angle_deg', 0)} deg\n"
+    )
+
+
+def _exec_blade_array(inputs: dict) -> str:
+    n_blades = inputs["number_blades"]
+    return (
+        f"Blade array configuration:\n"
+        f"  Number of blades: {n_blades}\n"
+        f"  Angular spacing: {360/n_blades:.1f} degrees\n"
+        f"\n"
+        f"To generate the full array, compute blade geometry first, then use:\n"
+        f"  from astraturbo.blade import generate_blade_array_flat\n"
+        f"  all_points = generate_blade_array_flat(row.profiles_3d, {n_blades})\n"
+    )
 
 
 def _exec_inspect(inputs: dict) -> str:
