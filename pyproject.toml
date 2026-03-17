@@ -1,36 +1,43 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "astraturbo"
 version = "0.1.0"
 description = "Open-source integrated turbomachinery design and simulation platform"
 readme = "README.md"
-license = {text = "GPL-3.0-or-later"}
-requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.9"
 authors = [
-    {name = "AstraTurbo Contributors"},
+    {name = "Ayushman Dutta", email = "ayushman999@gmail.com"},
 ]
 keywords = [
     "turbomachinery",
     "blade-design",
     "cfd",
+    "fea",
     "mesh-generation",
     "compressor",
     "turbine",
     "cgns",
     "openfoam",
+    "fluent",
+    "calculix",
+    "meanline",
+    "velocity-triangle",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Physics",
 ]
@@ -51,6 +58,7 @@ cad = [
 gui = [
     "PySide6>=6.5",
     "pyqtgraph>=0.13",
+    "PyOpenGL>=3.1",
     "vtk>=9.2",
 ]
 optimization = [
@@ -65,6 +73,11 @@ dev = [
 all = [
     "astraturbo[cad,gui,optimization,dev]",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ayushman4/AstraTurbo"
+Repository = "https://github.com/ayushman4/AstraTurbo"
+Issues = "https://github.com/ayushman4/AstraTurbo/issues"
 
 [project.scripts]
 astraturbo = "astraturbo.cli.main:main"
