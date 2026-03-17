@@ -107,10 +107,6 @@ python -m astraturbo gui
 
 ### Screenshots
 
-**2D Profile Editor** — select camber line and thickness type, profile updates live:
-
-![2D Profile Tab](docs/images/gui-profile-tab.png)
-
 **AI Assistant — Meanline Design**: Ask Claude to design a compressor. It calls `meanline_compressor` automatically and returns a full engineering breakdown with overall performance:
 
 ![AI Design Request](docs/images/Figure1.png)
@@ -126,10 +122,6 @@ python -m astraturbo gui
 **AI Assistant — Next Steps**: Offers to re-run with 7 stages, generate blade profiles, create CFD mesh, or run structural analysis — all from the same conversation:
 
 ![Next Steps](docs/images/Figure4.png)
-
-**File Import** — load OpenFOAM meshes, legacy projects, or any of 30 supported formats:
-
-![File Import](docs/images/gui-file-dialog.png)
 
 **Keyboard shortcuts:** Cmd+N (New), Cmd+O (Open), Cmd+S (Save), Cmd+Q (Quit)
 
