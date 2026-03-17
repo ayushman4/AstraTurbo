@@ -217,6 +217,11 @@ class MainWindow(QMainWindow):
         self._point_cloud_viewer = PointCloudViewer()
         self._tabs.addTab(self._point_cloud_viewer, "3D Viewer")
 
+        # AI Chat tab
+        from .panels.ai_chat import AIChatPanel
+        self._ai_chat = AIChatPanel()
+        self._tabs.addTab(self._ai_chat, "AI Assistant")
+
         # Start on the 2D Profile tab
         self._tabs.setCurrentIndex(0)
 

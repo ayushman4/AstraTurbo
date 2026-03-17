@@ -7,6 +7,8 @@ one stage of the turbomachinery engineering pipeline.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
+│              AI Assistant (Claude API / CLI fallback)         │
+├─────────────────────────────────────────────────────────────┤
 │                         GUI / CLI                           │
 ├─────────────────────────────────────────────────────────────┤
 │                      Optimization (pymoo)                   │
@@ -40,24 +42,31 @@ design (standalone — outputs feed into blade/)
                                                ← fea ← fea/workflow
                                       ← optimization
                                                ← gui/cli
+ai (top layer — calls all modules via tool use)
 ```
 
 ## Modules
 
-### design/ (NEW)
+### ai/
+Claude-powered AI assistant with 9 tools. Uses the `anthropic` SDK with tool use —
+Claude calls AstraTurbo functions directly (meanline, profile, mesh, CFD, FEA, y+,
+materials, formats, file inspect). Requires `ANTHROPIC_API_KEY`.
+Accessible via: GUI (AI Assistant tab), CLI (`astraturbo ai`), Python (`create_assistant()`).
+
+### design/
 Velocity triangle calculations and meanline stage-by-stage analysis.
 Input: pressure ratio, mass flow, RPM, radii.
 Output: blade angles, loading coefficients, De Haller ratios.
 Connects to blade/ by auto-generating stagger, camber, and solidity parameters.
 
-### cfd/ (Enhanced)
+### cfd/
 Unified `CFDWorkflow` class generates complete case files for:
 - **OpenFOAM**: Allrun, controlDict, fvSchemes, fvSolution, BCs, MRF for rotors
 - **Fluent**: Journal (.jou) with kw-SST, BCs, convergence monitors
 - **CFX**: CCL definition with domain, turbulence, boundaries, solver control
 - **SU2**: Config (.cfg) with RANS/SST setup
 
-### fea/ (NEW)
+### fea/
 Structural analysis integration:
 - **material.py**: 6 materials (Inconel 718/625, Ti-6Al-4V, CMSX-4, Steel, Al)
 - **mesh_export.py**: Extrude blade surface to hex solid, map CFD pressure to FEA
@@ -75,5 +84,6 @@ Via cadquery (optional): STEP, IGES.
 2. **Observer Pattern** — tree nodes notify parents on change
 3. **Factory Functions** — `create_camberline("naca65")`, `get_material("inconel_718")`
 4. **Unified I/O** — `read_mesh()` / `write_mesh()` auto-detect format from extension
-5. **Workflow Classes** — `CFDWorkflow` and `FEAWorkflow` orchestrate multi-step pipelines
-6. **Cross-Platform** — every dependency is pip-installable on Win/Linux/Mac
+5. **Workflow Classes** — `CFDWorkflow`, `FEAWorkflow`, `AstraTurboAssistant` orchestrate pipelines
+6. **AI-First Option** — natural language interface to the entire platform via Claude
+7. **Cross-Platform** — every dependency is pip-installable on Win/Linux/Mac

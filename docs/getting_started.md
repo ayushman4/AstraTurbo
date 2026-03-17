@@ -300,7 +300,9 @@ print(f"Estimated y+: {yp:.1f}")
 | `astraturbo.export` | `from astraturbo.export import write_cgns_structured` | File export |
 | `astraturbo.export` | `from astraturbo.export import read_openfoam_points` | OpenFOAM import |
 | `astraturbo.cfd` | `from astraturbo.cfd import create_openfoam_case` | CFD case setup |
+| `astraturbo.fea` | `from astraturbo.fea import FEAWorkflow, get_material` | Structural analysis |
 | `astraturbo.optimization` | `from astraturbo.optimization import Optimizer` | Design optimization |
+| `astraturbo.ai` | `from astraturbo.ai import create_assistant` | AI assistant |
 
 ---
 
@@ -309,9 +311,17 @@ print(f"Estimated y+: {yp:.1f}")
 | Command | Description |
 |---|---|
 | `python -m astraturbo gui` | Launch graphical interface |
+| `python -m astraturbo ai` | AI design assistant (interactive chat) |
+| `python -m astraturbo ai "prompt"` | AI single request |
 | `python -m astraturbo profile [options]` | Generate a 2D blade profile |
 | `python -m astraturbo mesh [options]` | Generate a mesh from a profile CSV |
+| `python -m astraturbo meanline [options]` | Meanline compressor design |
+| `python -m astraturbo cfd [options]` | Set up CFD case (OpenFOAM/Fluent/CFX/SU2) |
+| `python -m astraturbo fea [options]` | Set up FEA structural analysis |
+| `python -m astraturbo yplus [options]` | y+ / cell height calculator |
 | `python -m astraturbo info <file>` | Inspect a mesh/points/CSV file |
-| `python -m astraturbo cfd [options]` | Set up an OpenFOAM or SU2 case |
+| `python -m astraturbo formats` | List 30 supported file formats |
+| `python -m astraturbo optimize [options]` | Run blade optimization |
+| `python -m astraturbo multistage [options]` | Multi-row stage mesh |
+| `python -m astraturbo run <case>` | Execute CFD/FEA solver |
 | `python -m astraturbo --help` | Show all commands |
-| `python -m astraturbo <command> --help` | Show options for a command |

@@ -37,6 +37,11 @@ def main():
     # --- gui ---
     subparsers.add_parser("gui", help="Launch the graphical interface")
 
+    # --- ai ---
+    ai_parser = subparsers.add_parser("ai", help="AI design assistant (Claude API)")
+    ai_parser.add_argument("prompt", nargs="?", default=None,
+                           help="Design request (omit for interactive chat)")
+
     # --- profile ---
     prof_parser = subparsers.add_parser(
         "profile", help="Generate a 2D blade profile"
@@ -157,6 +162,8 @@ def main():
 
     if args.command == "gui":
         _cmd_gui()
+    elif args.command == "ai":
+        _cmd_ai(args)
     elif args.command == "profile":
         _cmd_profile(args)
     elif args.command == "mesh":
@@ -193,6 +200,29 @@ def _cmd_gui():
     except ImportError:
         print("ERROR: GUI dependencies not installed.")
         print("Install with:  pip install astraturbo[gui]")
+        sys.exit(1)
+
+
+def _cmd_ai(args):
+    """AI design assistant."""
+    try:
+        from astraturbo.ai import create_assistant, chat_cli
+    except ImportError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+
+    if args.prompt:
+        # Single-shot mode
+        try:
+            assistant = create_assistant()
+            response = assistant.chat(args.prompt)
+            print(response)
+        except Exception as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+    else:
+        # Interactive chat mode
+        chat_cli()
         sys.exit(1)
 
 

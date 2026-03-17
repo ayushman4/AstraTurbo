@@ -64,6 +64,9 @@ gui = [
 optimization = [
     "pymoo>=0.6",
 ]
+ai = [
+    "anthropic>=0.40",
+]
 dev = [
     "pytest>=7.0",
     "pytest-qt>=4.2",
@@ -71,7 +74,7 @@ dev = [
     "ruff>=0.1",
 ]
 all = [
-    "astraturbo[cad,gui,optimization,dev]",
+    "astraturbo[cad,gui,optimization,ai,dev]",
 ]
 
 [project.urls]

@@ -6,6 +6,7 @@ AstraTurbo covers the full turbomachinery engineering pipeline:
 
 ```
 Requirements → Meanline Design → Blade Geometry → Mesh → CFD → FEA → Optimization
+                              ↑ AI Assistant (Claude) can drive the entire pipeline ↑
 ```
 
 AstraTurbo is an open-source turbomachinery platform. Built with Python 3.10+, cross-platform dependencies, and a modular architecture. Runs natively on **Windows, Linux, and macOS**.
@@ -24,7 +25,10 @@ pip install -e .
 # With GUI (adds PySide6, pyqtgraph, VTK)
 pip install -e ".[gui]"
 
-# Everything (adds optimization, dev tools)
+# With AI assistant (adds Claude API integration)
+pip install -e ".[ai]"
+
+# Everything (adds optimization, AI, dev tools)
 pip install -e ".[all]"
 ```
 
@@ -57,13 +61,13 @@ python -m astraturbo gui
 ### Window Layout
 
 ```
-┌─────────────┬────────────────────────────────────┬──────────────┐
-│  Machine    │  2D Profile / 3D Blade / 3D Viewer │  Properties  │
-│  Structure  │  (center, tabbed)                  │  (editable   │
-│  (tree)     │                                    │   fields)    │
-├─────────────┴────────────────────────────────────┴──────────────┤
-│  Mesh Panel (cell counts, grading, quality report)              │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────┬──────────────────────────────────────────────┬──────────────┐
+│  Machine    │  2D Profile / 3D Blade / 3D Viewer / AI Chat │  Properties  │
+│  Structure  │  (center, tabbed)                            │  (editable   │
+│  (tree)     │                                              │   fields)    │
+├─────────────┴──────────────────────────────────────────────┴──────────────┤
+│  Mesh Panel (cell counts, grading, quality report)                        │
+└───────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Step-by-Step Workflow
@@ -94,6 +98,38 @@ python -m astraturbo gui
 **Step 6 — Import existing meshes:**
 - **File > Import OpenFOAM Points** — loads and visualizes in the **3D Viewer** tab
 - **File > Import Legacy XML Project** — legacy projects
+
+**Step 7 — AI Assistant (optional):**
+1. Click the **AI Assistant** tab
+2. Type a natural language request, e.g. "Design a 5-stage compressor with PR=8"
+3. The AI calls AstraTurbo tools automatically (API mode) or generates commands (CLI fallback)
+4. Requires: `pip install anthropic` + `export ANTHROPIC_API_KEY=sk-ant-...`
+
+### Screenshots
+
+**2D Profile Editor** — select camber line and thickness type, profile updates live:
+
+![2D Profile Tab](docs/images/gui-profile-tab.png)
+
+**AI Assistant — Meanline Design**: Ask Claude to design a compressor. It calls `meanline_compressor` automatically and returns a full engineering breakdown with overall performance:
+
+![AI Design Request](docs/images/Figure1.png)
+
+**AI Assistant — Stage Analysis**: Stage-by-stage velocity triangles, blade angles, and De Haller ratio warnings flagged automatically:
+
+![Stage Analysis](docs/images/Figure2.png)
+
+**AI Assistant — Engineering Judgment**: The AI identifies that 5 stages is too few for PR=8 (loading too aggressive), explains the root cause, and recommends corrective actions:
+
+![Root Cause Analysis](docs/images/Figure3.png)
+
+**AI Assistant — Next Steps**: Offers to re-run with 7 stages, generate blade profiles, create CFD mesh, or run structural analysis — all from the same conversation:
+
+![Next Steps](docs/images/Figure4.png)
+
+**File Import** — load OpenFOAM meshes, legacy projects, or any of 30 supported formats:
+
+![File Import](docs/images/gui-file-dialog.png)
 
 **Keyboard shortcuts:** Cmd+N (New), Cmd+O (Open), Cmd+S (Save), Cmd+Q (Quit)
 
@@ -131,7 +167,48 @@ python -m astraturbo info blade.csv                 # CSV
 
 ```bash
 python -m astraturbo cfd --solver openfoam --velocity 100 -o my_case
+python -m astraturbo cfd --solver fluent --velocity 120 -o fluent_case
+python -m astraturbo cfd --solver cfx --rotating --omega 1500 -o cfx_case
 python -m astraturbo cfd --solver su2 -o my_su2_case
+```
+
+### AI Assistant
+
+```bash
+# Interactive chat (requires ANTHROPIC_API_KEY)
+python -m astraturbo ai
+
+# Single request
+python -m astraturbo ai "Design a 5-stage compressor with PR=8, mass flow 25 kg/s"
+```
+
+### Meanline design
+
+```bash
+python -m astraturbo meanline --pr 4.0 --mass-flow 20 --rpm 12000 --r-hub 0.15 --r-tip 0.30
+```
+
+### y+ calculator
+
+```bash
+python -m astraturbo yplus --velocity 100 --chord 0.1
+python -m astraturbo yplus --velocity 100 --chord 0.1 --cell-height 0.00001
+```
+
+### FEA setup
+
+```bash
+python -m astraturbo fea --list-materials
+python -m astraturbo fea --material inconel_718 --omega 1200 --surface blade.csv -o fea_case
+```
+
+### Other commands
+
+```bash
+python -m astraturbo formats                    # List 30 supported formats
+python -m astraturbo optimize --profile blade.csv --generations 50
+python -m astraturbo multistage --profiles r.csv s.csv --pitches 0.05 0.06 -o stage.cgns
+python -m astraturbo run cfd_case --solver openfoam
 ```
 
 ### End-to-end (no GUI)
@@ -319,13 +396,47 @@ write_mesh("output.vtu", points, cells)
 points = read_openfoam_points("/path/to/points")
 ```
 
+### AI Assistant (natural language → AstraTurbo)
+
+```python
+from astraturbo.ai import create_assistant
+
+# Requires ANTHROPIC_API_KEY environment variable
+assistant = create_assistant()
+
+# Single request — AI calls tools automatically
+response = assistant.chat(
+    "Design a 5-stage axial compressor with PR=8, mass flow 25 kg/s at 15000 RPM. "
+    "Generate NACA 65 profiles and set up an OpenFOAM case."
+)
+print(response)
+
+# Multi-turn conversation
+response2 = assistant.chat("Now check what y+ I need for the first stage at Mach 0.6")
+print(response2)
+
+# Reset conversation
+assistant.reset()
+```
+
+Claude calls 9 AstraTurbo tools directly —
+meanline design, profile generation, mesh generation, CFD setup, FEA setup,
+y+ calculator, file inspection, material database, format listing.
+
+Setup:
+```bash
+pip install anthropic
+export ANTHROPIC_API_KEY=sk-ant-api03-...
+```
+
 ---
 
 ## Architecture
 
 ```
 astraturbo/
-├── design/          Velocity triangles, meanline analysis (NEW)
+├── ai/              Claude-powered AI assistant (9 tools, NL interface)
+├── design/          Velocity triangles, meanline analysis
 ├── foundation/      Property system, signals, undo/redo, serialization
 ├── baseclass/       ATObject, Node tree, Drawable mixin
 ├── camberline/      8 camber line types
@@ -346,15 +457,15 @@ astraturbo/
 │   ├── multistage     Rotor+stator multi-row orchestration
 │   └── quality        Aspect ratio, skewness, y+ estimation
 ├── export/          30 formats: CGNS, OpenFOAM, Tecplot, VTK, Fluent, etc.
-├── cfd/             4 solvers: OpenFOAM, Fluent, CFX, SU2 (NEW: workflow)
-├── fea/             Structural analysis: CalculiX/Abaqus (NEW)
+├── cfd/             4 solvers: OpenFOAM, Fluent, CFX, SU2
+├── fea/             Structural analysis: CalculiX/Abaqus
 │   ├── material       6 turbomachinery materials database
 │   ├── calculix       Input file generation
 │   ├── mesh_export    Surface-to-solid mesh, CFD pressure mapping
 │   └── workflow       Coupled CFD-FEA pipeline
 ├── optimization/    pymoo-based multi-objective optimization
-├── gui/             PySide6 GUI with 3D point cloud viewer
-└── cli/             Command-line interface
+├── gui/             PySide6 GUI with 3D viewer + AI chat panel
+└── cli/             13 commands (profile, mesh, ai, meanline, cfd, fea, ...)
 ```
 
 ### Design pipeline
@@ -459,6 +570,7 @@ print(mat.to_calculix_format())  # Ready for FEA input
 | pyqtgraph | 2D/3D plotting in GUI | Optional (`[gui]`) |
 | vtk | 3D visualization | Optional (`[gui]`) |
 | pymoo | Multi-objective optimization | Optional (`[optimization]`) |
+| anthropic | Claude AI assistant | Optional (`[ai]`) |
 | cadquery | STEP/IGES CAD export | Optional (`[cad]`) |
 | matplotlib | CLI profile plotting (`--plot`) | Optional |
 
