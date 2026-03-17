@@ -1,0 +1,89 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "astraturbo"
+version = "0.1.0"
+description = "Open-source integrated turbomachinery design and simulation platform"
+readme = "README.md"
+license = {text = "GPL-3.0-or-later"}
+requires-python = ">=3.10"
+authors = [
+    {name = "AstraTurbo Contributors"},
+]
+keywords = [
+    "turbomachinery",
+    "blade-design",
+    "cfd",
+    "mesh-generation",
+    "compressor",
+    "turbine",
+    "cgns",
+    "openfoam",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "geomdl>=5.3.1",
+    "h5py>=3.8",
+    "meshio>=5.3",
+    "pyyaml>=6.0",
+    "blinker>=1.6",
+]
+
+[project.optional-dependencies]
+cad = [
+    "cadquery>=2.3",
+]
+gui = [
+    "PySide6>=6.5",
+    "pyqtgraph>=0.13",
+    "vtk>=9.2",
+]
+optimization = [
+    "pymoo>=0.6",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-qt>=4.2",
+    "mypy>=1.0",
+    "ruff>=0.1",
+]
+all = [
+    "astraturbo[cad,gui,optimization,dev]",
+]
+
+[project.scripts]
+astraturbo = "astraturbo.cli.main:main"
+
+[project.gui-scripts]
+astraturbo-gui = "astraturbo.gui.app:main"
+
+[tool.setuptools.packages.find]
+include = ["astraturbo*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
