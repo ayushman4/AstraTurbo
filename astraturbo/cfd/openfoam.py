@@ -37,6 +37,20 @@ def create_openfoam_case(
     """
     case_dir = Path(case_dir)
 
+    # Security: validate solver and turbulence model names
+    _ALLOWED_SOLVERS = {
+        "simpleFoam", "pimpleFoam", "rhoSimpleFoam", "rhoPimpleFoam",
+        "sonicFoam", "compressibleInterFoam",
+    }
+    _ALLOWED_TURB = {
+        "kOmegaSST", "kEpsilon", "SpalartAllmaras", "kOmega",
+        "realizableKE", "LamBremhorstKE", "laminar",
+    }
+    if solver not in _ALLOWED_SOLVERS:
+        raise ValueError(f"Invalid solver '{solver}'. Allowed: {_ALLOWED_SOLVERS}")
+    if turbulence_model not in _ALLOWED_TURB:
+        raise ValueError(f"Invalid turbulence model '{turbulence_model}'. Allowed: {_ALLOWED_TURB}")
+
     # Create directory structure
     (case_dir / "0").mkdir(parents=True, exist_ok=True)
     (case_dir / "constant" / "polyMesh").mkdir(parents=True, exist_ok=True)

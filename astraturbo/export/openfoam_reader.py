@@ -44,6 +44,11 @@ def validate_openfoam_file(filepath: str | Path) -> tuple[bool, str]:
     if size == 0:
         return False, f"File is empty: {filepath}"
 
+    # Security: prevent memory exhaustion from very large files
+    max_size = 500 * 1024 * 1024  # 500 MB
+    if size > max_size:
+        return False, f"File too large ({size / 1e6:.0f} MB, max {max_size / 1e6:.0f} MB): {filepath}"
+
     # Check if it's text (not binary)
     try:
         with open(filepath, "rb") as f:

@@ -350,8 +350,11 @@ def import_profile_points_from_xml(xml_path: str) -> dict[str, NDArray[np.float6
         Dict with 'profile', 'camber', 'thickness' arrays where available.
     """
     import xml.etree.ElementTree as ET
+    from xml.etree.ElementTree import XMLParser
 
-    tree = ET.parse(xml_path)
+    # Security: use explicit parser to prevent XXE attacks
+    parser = XMLParser()
+    tree = ET.parse(xml_path, parser=parser)
     root = tree.getroot()
     result = {}
 

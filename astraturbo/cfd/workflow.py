@@ -156,10 +156,13 @@ class CFDWorkflow:
 
         # If mesh is CGNS, write conversion script
         if self._mesh_path and self._mesh_path.endswith(".cgns"):
+            # Security: quote path to prevent shell injection
+            import shlex
+            safe_path = shlex.quote(self._mesh_path)
             script = self._case_dir / "import_mesh.sh"
             with open(script, "w") as f:
                 f.write("#!/bin/bash\n")
-                f.write(f"cgnsToFoam {self._mesh_path}\n")
+                f.write(f"cgnsToFoam {safe_path}\n")
                 f.write("checkMesh\n")
             script.chmod(0o755)
 
@@ -177,19 +180,27 @@ class CFDWorkflow:
                 f.write("}\n")
 
         # Write Allrun script
+        # Security: validate solver name against whitelist, quote paths
+        import shlex
+        allowed_solvers = {"simpleFoam", "pimpleFoam", "rhoSimpleFoam", "sonicFoam"}
+        solver = "simpleFoam" if not cfg.is_rotating else "pimpleFoam"
+        if solver not in allowed_solvers:
+            solver = "simpleFoam"
+
+        n_procs = max(1, min(int(cfg.n_procs), 1024))  # Bound to sane range
+
         allrun = self._case_dir / "Allrun"
         with open(allrun, "w") as f:
             f.write("#!/bin/bash\n")
             f.write("cd ${0%/*} || exit 1\n")
             if self._mesh_path and self._mesh_path.endswith(".cgns"):
-                f.write(f"cgnsToFoam {self._mesh_path}\n")
+                f.write(f"cgnsToFoam {shlex.quote(self._mesh_path)}\n")
             else:
                 f.write("blockMesh\n")
             f.write("checkMesh\n")
-            solver = "simpleFoam" if not cfg.is_rotating else "pimpleFoam"
-            if cfg.n_procs > 1:
-                f.write(f"decomposePar -force\n")
-                f.write(f"mpirun -np {cfg.n_procs} {solver} -parallel\n")
+            if n_procs > 1:
+                f.write("decomposePar -force\n")
+                f.write(f"mpirun -np {n_procs} {solver} -parallel\n")
                 f.write("reconstructPar\n")
             else:
                 f.write(f"{solver}\n")

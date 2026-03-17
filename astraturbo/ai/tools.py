@@ -9,9 +9,32 @@ from __future__ import annotations
 
 import json
 import math
+import os
+from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+
+# ── Security: path validation ──
+
+def _validate_path(path_str: str, must_exist: bool = False) -> Path:
+    """Validate and sanitize a user-supplied file path.
+
+    Prevents path traversal attacks by resolving the path and checking
+    it doesn't escape the current working directory.
+    """
+    path = Path(path_str).resolve()
+    cwd = Path.cwd().resolve()
+
+    # Block obvious traversal attempts
+    if ".." in Path(path_str).parts:
+        raise ValueError(f"Path traversal not allowed: {path_str}")
+
+    if must_exist and not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+
+    return path
 
 
 # ── Tool registry ──
@@ -434,15 +457,36 @@ def execute_tool(name: str, inputs: dict) -> str:
 def _exec_meanline(inputs: dict) -> str:
     from astraturbo.design import meanline_compressor, meanline_to_blade_parameters
 
+    # Security: validate numeric ranges to prevent DoS
+    pr = float(inputs["overall_pressure_ratio"])
+    if not (1.01 <= pr <= 50.0):
+        return f"Error: pressure ratio {pr} out of range [1.01, 50.0]"
+
+    mass_flow = float(inputs["mass_flow"])
+    if not (0.01 <= mass_flow <= 10000.0):
+        return f"Error: mass flow {mass_flow} out of range [0.01, 10000] kg/s"
+
+    rpm = float(inputs["rpm"])
+    if not (100 <= rpm <= 200000):
+        return f"Error: RPM {rpm} out of range [100, 200000]"
+
+    r_hub = float(inputs["r_hub"])
+    r_tip = float(inputs["r_tip"])
+    if r_hub <= 0 or r_tip <= 0 or r_tip <= r_hub:
+        return f"Error: radii invalid (need 0 < r_hub < r_tip)"
+
     kwargs = {
-        "overall_pressure_ratio": inputs["overall_pressure_ratio"],
-        "mass_flow": inputs["mass_flow"],
-        "rpm": inputs["rpm"],
-        "r_hub": inputs["r_hub"],
-        "r_tip": inputs["r_tip"],
+        "overall_pressure_ratio": pr,
+        "mass_flow": mass_flow,
+        "rpm": rpm,
+        "r_hub": r_hub,
+        "r_tip": r_tip,
     }
     if "n_stages" in inputs:
-        kwargs["n_stages"] = inputs["n_stages"]
+        n_stages = int(inputs["n_stages"])
+        if not (1 <= n_stages <= 30):
+            return f"Error: n_stages {n_stages} out of range [1, 30]"
+        kwargs["n_stages"] = n_stages
     if "reaction" in inputs:
         kwargs["reaction"] = inputs["reaction"]
 
@@ -490,7 +534,8 @@ def _exec_profile(inputs: dict) -> str:
     )
 
     if "output_path" in inputs:
-        np.savetxt(inputs["output_path"], coords, delimiter=",", header="x,y", comments="")
+        safe_path = _validate_path(inputs["output_path"])
+        np.savetxt(str(safe_path), coords, delimiter=",", header="x,y", comments="")
         output += f"Saved to: {inputs['output_path']}\n"
 
     return output
@@ -499,12 +544,20 @@ def _exec_profile(inputs: dict) -> str:
 def _exec_mesh(inputs: dict) -> str:
     from astraturbo.mesh.multiblock import generate_blade_passage_mesh
 
-    profile = np.loadtxt(inputs["profile_path"], delimiter=",", skiprows=1)[:, :2]
+    safe_profile = _validate_path(inputs["profile_path"], must_exist=True)
+    profile = np.loadtxt(str(safe_profile), delimiter=",", skiprows=1)[:, :2]
+
+    # Validate numeric inputs
+    n_blade = max(4, min(int(inputs.get("n_blade", 40)), 200))
+    n_ogrid = max(2, min(int(inputs.get("n_ogrid", 10)), 50))
+    n_inlet = max(2, min(int(inputs.get("n_inlet", 15)), 100))
+    n_outlet = max(2, min(int(inputs.get("n_outlet", 15)), 100))
+    n_passage = max(2, min(int(inputs.get("n_passage", 20)), 100))
 
     mesh = generate_blade_passage_mesh(
         profile=profile,
         pitch=inputs.get("pitch", 0.05),
-        n_blade=inputs.get("n_blade", 40),
+        n_blade=n_blade,
         n_ogrid=inputs.get("n_ogrid", 10),
         n_inlet=inputs.get("n_inlet", 15),
         n_outlet=inputs.get("n_outlet", 15),

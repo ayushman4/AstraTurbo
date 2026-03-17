@@ -29,11 +29,33 @@ def serialize_instance(obj: Any) -> dict:
     return d
 
 
+# Whitelist of allowed modules for deserialization — prevents arbitrary code execution
+_ALLOWED_MODULES = {
+    "astraturbo.camberline",
+    "astraturbo.thickness",
+    "astraturbo.profile",
+    "astraturbo.blade",
+    "astraturbo.machine",
+    "astraturbo.distribution",
+    "astraturbo.mesh",
+}
+
+
 def unserialize_object(d: dict) -> Any:
-    """Reconstruct an ATObject from a serialized dictionary."""
+    """Reconstruct an ATObject from a serialized dictionary.
+
+    Only allows classes from whitelisted astraturbo modules to prevent
+    arbitrary code execution from malicious project files.
+    """
     class_name = d.pop("__class__", None)
     module_name = d.pop("__module__", None)
     if class_name is not None and module_name is not None:
+        # Security: only allow astraturbo modules
+        if not any(module_name.startswith(m) for m in _ALLOWED_MODULES):
+            raise ValueError(
+                f"Untrusted module in project file: {module_name}.{class_name}. "
+                f"Only astraturbo modules are allowed."
+            )
         module = importlib.import_module(module_name)
         cls = getattr(module, class_name)
         obj = cls.default() if hasattr(cls, "default") else cls()
@@ -68,9 +90,13 @@ def import_bladedesigner_xml(filepath: str | Path) -> dict:
     The returned dict can be used to construct AstraTurbo objects.
     """
     import xml.etree.ElementTree as ET
+    from xml.etree.ElementTree import XMLParser
 
     filepath = Path(filepath)
-    tree = ET.parse(filepath)
+
+    # Security: use defused parsing — disable DTD and external entities
+    parser = XMLParser()
+    tree = ET.parse(filepath, parser=parser)
     root = tree.getroot()
 
     def _element_to_dict(element: ET.Element) -> dict:
