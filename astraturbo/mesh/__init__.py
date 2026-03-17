@@ -22,7 +22,15 @@ from .quality import (
     compute_skewness,
     estimate_yplus,
     first_cell_height_for_yplus,
+    auto_first_cell_height,
     mesh_quality_report,
+)
+from .tip_clearance import generate_tip_clearance_mesh
+from .smoothing import (
+    laplacian_smooth,
+    laplacian_smooth_vectorized,
+    orthogonality_correction,
+    combined_smooth,
 )
 from .polyline import Polyline, Arc, BlockEdge
 from .grading import (
@@ -66,7 +74,13 @@ __all__ = [
     "OGridGenerator", "OGridMesh", "OGridMeshConfig",
     # Quality
     "compute_aspect_ratio", "compute_skewness",
-    "estimate_yplus", "first_cell_height_for_yplus", "mesh_quality_report",
+    "estimate_yplus", "first_cell_height_for_yplus",
+    "auto_first_cell_height", "mesh_quality_report",
+    # Tip clearance
+    "generate_tip_clearance_mesh",
+    # Smoothing
+    "laplacian_smooth", "laplacian_smooth_vectorized",
+    "orthogonality_correction", "combined_smooth",
     # Polyline/Arc
     "Polyline", "Arc", "BlockEdge",
     # Grading

@@ -160,6 +160,116 @@ def first_cell_height_for_yplus(
     return float(y)
 
 
+def auto_first_cell_height(
+    velocity: float,
+    chord: float,
+    density: float = 1.225,
+    dynamic_viscosity: float = 1.8e-5,
+    target_yplus: float = 1.0,
+    ogrid_layers: int = 20,
+    total_bl_thickness_fraction: float = 0.1,
+) -> dict[str, float]:
+    """Compute recommended first cell height and O-grid grading automatically.
+
+    Given flow conditions and a target y+, this function returns:
+      - The first cell height needed
+      - A recommended O-grid geometric grading ratio
+      - The estimated boundary layer thickness
+      - The y+ that would result
+
+    The boundary layer thickness is estimated from the Blasius solution
+    for turbulent flow (1/7 power law):
+        delta = 0.37 * chord * Re^(-0.2)
+
+    The grading ratio is chosen so that the geometric series of cell
+    heights fills from the first cell to the total O-grid thickness.
+
+    Args:
+        velocity: Freestream velocity (m/s).
+        chord: Reference chord length (m).
+        density: Fluid density (kg/m^3). Default: air at STP.
+        dynamic_viscosity: Dynamic viscosity (Pa.s). Default: air at STP.
+        target_yplus: Desired y+ value. 1.0 for wall-resolved LES/DNS,
+            30-100 for wall functions.
+        ogrid_layers: Number of O-grid cells in the wall-normal direction.
+        total_bl_thickness_fraction: Fraction of chord for total O-grid
+            thickness. The O-grid should capture ~1-2x the boundary layer.
+
+    Returns:
+        Dictionary with:
+            'first_cell_height': Required first cell height (m).
+            'grading_ratio': Recommended geometric grading ratio for O-grid.
+            'boundary_layer_thickness': Estimated BL thickness (m).
+            'reynolds_number': Chord-based Reynolds number.
+            'estimated_yplus': The y+ from the computed cell height.
+            'ogrid_total_thickness': Total O-grid radial extent (m).
+    """
+    # Reynolds number
+    re = density * velocity * chord / dynamic_viscosity
+    if re < 1.0:
+        return {
+            "first_cell_height": 0.0,
+            "grading_ratio": 1.0,
+            "boundary_layer_thickness": 0.0,
+            "reynolds_number": re,
+            "estimated_yplus": 0.0,
+            "ogrid_total_thickness": 0.0,
+        }
+
+    # Estimate friction coefficient (Schlichting flat-plate correlation)
+    cf = 0.058 * re ** (-0.2)
+    tau_w = 0.5 * cf * density * velocity**2
+    u_tau = np.sqrt(tau_w / density)
+
+    # First cell height for target y+
+    y1 = target_yplus * dynamic_viscosity / (density * u_tau)
+
+    # Estimated boundary layer thickness (turbulent, 1/7 power law)
+    delta = 0.37 * chord * re ** (-0.2)
+
+    # O-grid total thickness (capture the full BL)
+    ogrid_thickness = max(total_bl_thickness_fraction * chord, 1.5 * delta)
+
+    # Compute grading ratio
+    # Geometric series: y1 * sum(r^k, k=0..N-1) = ogrid_thickness
+    # sum = (r^N - 1) / (r - 1) = ogrid_thickness / y1
+    # Solve for r iteratively
+    target_sum = ogrid_thickness / y1 if y1 > 1e-15 else 1e10
+    n = ogrid_layers
+
+    # Newton's method to find grading ratio r
+    r = 1.2  # initial guess
+    for _ in range(50):
+        if abs(r - 1.0) < 1e-10:
+            f = n - target_sum
+            fp = 0.5 * n * (n - 1)
+            r = max(1.001, r - f / fp if abs(fp) > 1e-15 else r + 0.1)
+            continue
+
+        geom_sum = (r**n - 1.0) / (r - 1.0)
+        f = geom_sum - target_sum
+        # Derivative: d/dr [(r^N - 1)/(r-1)]
+        fp = (n * r ** (n - 1) * (r - 1.0) - (r**n - 1.0)) / (r - 1.0) ** 2
+        if abs(fp) < 1e-15:
+            break
+        r_new = r - f / fp
+        if abs(r_new - r) < 1e-10:
+            break
+        r = max(1.001, r_new)
+
+    # Verify y+
+    estimated_yplus = density * u_tau * y1 / dynamic_viscosity
+
+    return {
+        "first_cell_height": float(y1),
+        "grading_ratio": float(r),
+        "boundary_layer_thickness": float(delta),
+        "reynolds_number": float(re),
+        "estimated_yplus": float(estimated_yplus),
+        "ogrid_total_thickness": float(ogrid_thickness),
+    }
+
+
 def mesh_quality_report(block: NDArray[np.float64]) -> dict:
     """Generate a summary quality report for a mesh block.
 

@@ -119,7 +119,7 @@ class TestPointCloudErrors:
 class TestRealFile:
     """Test against the actual OpenFOAM points file if available."""
 
-    REAL_FILE = Path("/Users/ayudutta/Downloads/points")
+    REAL_FILE = Path("/Users/ayudutta/Downloads/points.txt")
 
     @pytest.mark.skipif(
         not REAL_FILE.exists(), reason="Real test file not available"

@@ -149,11 +149,18 @@ class MainWindow(QMainWindow):
         self._add_action(compute_menu, "FEA &Structural Analysis...", self._setup_fea)
         compute_menu.addSeparator()
         self._add_action(compute_menu, "Run &Optimization...", self._run_optimization)
+        compute_menu.addSeparator()
+        self._add_action(compute_menu, "Run &Throughflow Solver...", self._run_throughflow)
+        self._add_action(compute_menu, "S&mooth Mesh...", self._smooth_mesh)
+        self._add_action(compute_menu, "&Parametric Sweep...", self._run_parametric_sweep)
 
         # --- Tools menu ---
         tools_menu = menubar.addMenu("&Tools")
         self._add_action(tools_menu, "&y+ Calculator...", self._yplus_calculator)
         self._add_action(tools_menu, "List Supported &Formats", self._show_formats)
+        tools_menu.addSeparator()
+        self._add_action(tools_menu, "&Design Database...", self._open_design_database)
+        self._add_action(tools_menu, "&HPC Job Manager...", self._open_hpc_manager)
 
         # --- Help menu ---
         help_menu = menubar.addMenu("&Help")
@@ -997,3 +1004,371 @@ class MainWindow(QMainWindow):
             lines.append(f"[{rw}] {name}: {exts} — {info['description']}")
 
         QMessageBox.information(self, "Supported Formats", "\n".join(lines))
+
+    # ----------------------------------------------------------------
+    # Throughflow solver
+    # ----------------------------------------------------------------
+
+    def _run_throughflow(self) -> None:
+        """Run the throughflow solver and display results."""
+        from PySide6.QtWidgets import QInputDialog
+
+        pr, ok = QInputDialog.getDouble(
+            self, "Throughflow Solver", "Pressure Ratio:", 1.5, 1.01, 10.0, 3
+        )
+        if not ok:
+            return
+
+        rpm, ok = QInputDialog.getDouble(
+            self, "Throughflow Solver", "RPM:", 10000, 100, 100000, 0
+        )
+        if not ok:
+            return
+
+        r_hub, ok = QInputDialog.getDouble(
+            self, "Throughflow Solver", "Hub Radius (m):", 0.1, 0.01, 5.0, 3
+        )
+        if not ok:
+            return
+
+        r_tip, ok = QInputDialog.getDouble(
+            self, "Throughflow Solver", "Tip Radius (m):", 0.2, 0.02, 5.0, 3
+        )
+        if not ok:
+            return
+
+        try:
+            from ..solver.throughflow import (
+                ThroughflowSolver, ThroughflowConfig, BladeRowSpec,
+            )
+
+            n_stations = 20
+            n_streamlines = 11
+            config = ThroughflowConfig(
+                n_stations=n_stations,
+                n_streamlines=n_streamlines,
+            )
+            solver = ThroughflowSolver(config)
+
+            hub_r = np.full(n_stations, r_hub)
+            tip_r = np.full(n_stations, r_tip)
+            axial = np.linspace(0.0, 0.2, n_stations)
+            solver.set_annulus(hub_r, tip_r, axial)
+
+            omega = rpm * 2.0 * np.pi / 60.0
+            rotor = BladeRowSpec(
+                row_type="rotor", n_blades=36,
+                inlet_station=n_stations // 4,
+                outlet_station=n_stations // 2,
+                omega=omega,
+            )
+            solver.add_blade_row(rotor)
+            solver.set_inlet_conditions()
+
+            self.statusBar().showMessage("Running throughflow solver...")
+            result = solver.solve()
+
+            pr_actual = "N/A"
+            if result.total_pressure is not None:
+                pr_actual = f"{result.total_pressure[-1, :].mean() / result.total_pressure[0, :].mean():.4f}"
+
+            msg = (
+                f"Throughflow Solver Results\n\n"
+                f"Converged: {result.converged}\n"
+                f"Iterations: {result.n_iterations}\n"
+                f"Pressure ratio: {pr_actual}\n"
+            )
+            if result.mach_number is not None:
+                msg += f"Max Mach: {result.mach_number.max():.4f}\n"
+            if result.residual_history:
+                msg += f"Final residual: {result.residual_history[-1]:.2e}\n"
+
+            QMessageBox.information(self, "Throughflow Results", msg)
+            self.statusBar().showMessage(
+                f"Throughflow done: {result.n_iterations} iterations, PR={pr_actual}"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Throughflow Error", f"{e}\n\n{traceback.format_exc()}")
+
+    # ----------------------------------------------------------------
+    # Mesh smoothing
+    # ----------------------------------------------------------------
+
+    def _smooth_mesh(self) -> None:
+        """Apply Laplacian smoothing to the last generated mesh."""
+        if self._last_mesh is None:
+            QMessageBox.warning(
+                self, "No Mesh",
+                "Generate a mesh first (Compute > Generate Multi-Block Mesh)"
+            )
+            return
+
+        from PySide6.QtWidgets import QInputDialog
+
+        iterations, ok = QInputDialog.getInt(
+            self, "Smooth Mesh", "Number of iterations:", 50, 1, 500
+        )
+        if not ok:
+            return
+
+        try:
+            from ..mesh.smoothing import laplacian_smooth
+            from ..mesh.quality import mesh_quality_report
+
+            # Smooth the first block of the mesh
+            block_pts = self._last_mesh.blocks[0].points
+            smoothed, metrics = laplacian_smooth(block_pts, n_iterations=iterations)
+
+            # Update the block
+            self._last_mesh.blocks[0].points = smoothed
+
+            # Update quality report
+            report = mesh_quality_report(smoothed)
+            report["n_cells"] = self._last_mesh.total_cells
+            report["n_points"] = self._last_mesh.total_points
+            self._mesh_panel.show_quality_report(report)
+
+            msg = (
+                f"Mesh Smoothing Results ({iterations} iterations)\n\n"
+                f"Before:\n"
+                f"  Aspect ratio max: {metrics['before_aspect_ratio_max']:.3f}\n"
+                f"  Skewness max: {metrics['before_skewness_max']:.3f}\n\n"
+                f"After:\n"
+                f"  Aspect ratio max: {metrics['after_aspect_ratio_max']:.3f}\n"
+                f"  Skewness max: {metrics['after_skewness_max']:.3f}"
+            )
+            QMessageBox.information(self, "Mesh Smoothing", msg)
+            self.statusBar().showMessage(
+                f"Mesh smoothed: {iterations} iterations, "
+                f"skewness {metrics['before_skewness_max']:.3f} -> {metrics['after_skewness_max']:.3f}"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Smoothing Error", f"{e}\n\n{traceback.format_exc()}")
+
+    # ----------------------------------------------------------------
+    # Design database
+    # ----------------------------------------------------------------
+
+    def _open_design_database(self) -> None:
+        """Open a dialog to list, save, and search designs."""
+        from PySide6.QtWidgets import QInputDialog
+
+        actions = ["List designs", "Save current design", "Search designs"]
+        action, ok = QInputDialog.getItem(
+            self, "Design Database", "Select action:", actions, 0, False
+        )
+        if not ok:
+            return
+
+        try:
+            from ..database.design_db import DesignDatabase
+            db = DesignDatabase()
+
+            if action == "List designs":
+                designs = db.list_designs()
+                if not designs:
+                    QMessageBox.information(self, "Design Database", "No designs in database.")
+                else:
+                    lines = [f"Designs ({len(designs)}):"]
+                    for d in designs:
+                        tags = ",".join(d["tags"]) if d["tags"] else "none"
+                        lines.append(f"[{d['id']}] {d['name']}  tags={tags}")
+                    QMessageBox.information(self, "Design Database", "\n".join(lines))
+
+            elif action == "Save current design":
+                name, ok = QInputDialog.getText(
+                    self, "Save Design", "Design name:"
+                )
+                if not ok or not name:
+                    db.close()
+                    return
+
+                params = {}
+                if self._current_profile:
+                    cl = getattr(self._current_profile._camber_line, "cl0", None)
+                    if cl is not None:
+                        params["cl0"] = cl
+                    mt = getattr(self._current_profile._thickness, "max_thickness", None)
+                    if mt is not None:
+                        params["max_thickness"] = mt
+
+                design_id = db.save_design(name=name, parameters=params)
+                QMessageBox.information(
+                    self, "Design Saved",
+                    f"Design '{name}' saved with ID={design_id}"
+                )
+
+            elif action == "Search designs":
+                query, ok = QInputDialog.getText(
+                    self, "Search Designs", "Search query:"
+                )
+                if not ok:
+                    db.close()
+                    return
+
+                results = db.search(query)
+                if not results:
+                    QMessageBox.information(self, "Search Results", "No matching designs found.")
+                else:
+                    lines = [f"Found {len(results)} designs:"]
+                    for d in results:
+                        lines.append(f"[{d['id']}] {d['name']}")
+                    QMessageBox.information(self, "Search Results", "\n".join(lines))
+
+            db.close()
+        except Exception as e:
+            QMessageBox.warning(self, "Database Error", f"{e}\n\n{traceback.format_exc()}")
+
+    # ----------------------------------------------------------------
+    # HPC Job Manager
+    # ----------------------------------------------------------------
+
+    def _open_hpc_manager(self) -> None:
+        """Show a dialog for HPC job submission."""
+        from PySide6.QtWidgets import QInputDialog
+
+        actions = ["Submit job", "Check job status", "Cancel job"]
+        action, ok = QInputDialog.getItem(
+            self, "HPC Job Manager", "Select action:", actions, 0, False
+        )
+        if not ok:
+            return
+
+        try:
+            from ..hpc.job_manager import HPCJobManager, HPCConfig
+
+            if action == "Submit job":
+                backends = ["local", "slurm", "pbs"]
+                backend, ok = QInputDialog.getItem(
+                    self, "HPC Backend", "Select backend:", backends, 0, False
+                )
+                if not ok:
+                    return
+
+                nodes, ok = QInputDialog.getInt(
+                    self, "HPC Submit", "Number of nodes:", 1, 1, 1000
+                )
+                if not ok:
+                    return
+
+                walltime, ok = QInputDialog.getText(
+                    self, "HPC Submit", "Wall time (HH:MM:SS):", text="2:00:00"
+                )
+                if not ok:
+                    return
+
+                case_dir = QFileDialog.getExistingDirectory(
+                    self, "Select Case Directory"
+                )
+                if not case_dir:
+                    return
+
+                config = HPCConfig(backend=backend, max_nodes=nodes, walltime=walltime)
+                manager = HPCJobManager(config)
+                job_id = manager.submit_job(case_dir=case_dir, walltime=walltime)
+
+                QMessageBox.information(
+                    self, "Job Submitted",
+                    f"Job ID: {job_id}\n"
+                    f"Backend: {backend}\n"
+                    f"Nodes: {nodes}\n"
+                    f"Walltime: {walltime}\n"
+                    f"Case: {case_dir}"
+                )
+
+            elif action == "Check job status":
+                job_id, ok = QInputDialog.getText(
+                    self, "HPC Status", "Job ID:"
+                )
+                if not ok or not job_id:
+                    return
+
+                manager = HPCJobManager()
+                status = manager.check_status(job_id)
+                QMessageBox.information(
+                    self, "Job Status",
+                    f"Job {job_id}: {status.value}"
+                )
+
+            elif action == "Cancel job":
+                job_id, ok = QInputDialog.getText(
+                    self, "HPC Cancel", "Job ID:"
+                )
+                if not ok or not job_id:
+                    return
+
+                manager = HPCJobManager()
+                success = manager.cancel_job(job_id)
+                if success:
+                    QMessageBox.information(self, "Job Cancelled", f"Job {job_id} cancelled.")
+                else:
+                    QMessageBox.warning(self, "Cancel Failed", f"Could not cancel job {job_id}")
+
+        except Exception as e:
+            QMessageBox.warning(self, "HPC Error", f"{e}\n\n{traceback.format_exc()}")
+
+    # ----------------------------------------------------------------
+    # Parametric Sweep
+    # ----------------------------------------------------------------
+
+    def _run_parametric_sweep(self) -> None:
+        """Run a parametric sweep over a design parameter."""
+        from PySide6.QtWidgets import QInputDialog
+
+        params = [
+            "cl0", "max_thickness", "stagger_angle", "chord",
+            "pressure_ratio", "mesh_ni", "mesh_nj"
+        ]
+        param, ok = QInputDialog.getItem(
+            self, "Parametric Sweep", "Parameter to sweep:", params, 0, False
+        )
+        if not ok:
+            return
+
+        start, ok = QInputDialog.getDouble(
+            self, "Parametric Sweep", "Start value:", 0.6, -100, 100, 4
+        )
+        if not ok:
+            return
+
+        end, ok = QInputDialog.getDouble(
+            self, "Parametric Sweep", "End value:", 1.4, -100, 100, 4
+        )
+        if not ok:
+            return
+
+        steps, ok = QInputDialog.getInt(
+            self, "Parametric Sweep", "Number of steps:", 5, 2, 50
+        )
+        if not ok:
+            return
+
+        try:
+            from ..foundation.design_chain import DesignChain
+
+            chain = DesignChain()
+            self.statusBar().showMessage(
+                f"Running sweep: {param} = {start} to {end} ({steps} steps)..."
+            )
+
+            results = chain.sweep(param, start=start, end=end, steps=steps)
+
+            n_success = sum(1 for r in results if r.success)
+            values = np.linspace(start, end, steps)
+
+            lines = [
+                f"Parametric Sweep: {param}\n",
+                f"Range: {start} to {end}, {steps} steps",
+                f"Successful: {n_success}/{len(results)}\n",
+            ]
+            for i, (val, res) in enumerate(zip(values, results)):
+                status = "OK" if res.success else "FAILED"
+                t = res.total_time
+                lines.append(f"  {param}={val:.4f} -> {status} ({t:.3f}s)")
+
+            QMessageBox.information(self, "Sweep Results", "\n".join(lines))
+            self.statusBar().showMessage(
+                f"Sweep done: {n_success}/{len(results)} successful"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Sweep Error", f"{e}\n\n{traceback.format_exc()}")

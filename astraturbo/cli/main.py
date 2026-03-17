@@ -7,6 +7,11 @@ Provides a fully functional command-line interface:
     astraturbo mesh project.yaml            Generate mesh and export
     astraturbo export project.yaml          Export geometry to CAD
     astraturbo info <file>                  Inspect a mesh/points file
+    astraturbo throughflow --pr 1.5 ...     Run throughflow solver
+    astraturbo smooth --input mesh.cgns ... Smooth a mesh
+    astraturbo database {list|save|export}  Design database operations
+    astraturbo hpc {submit|status|cancel}   HPC job management
+    astraturbo sweep --parameter cl0 ...    Parametric sweep
 """
 
 import argparse
@@ -153,6 +158,53 @@ def main():
     run_parser.add_argument("--solver", choices=["openfoam", "su2", "calculix"], default="openfoam")
     run_parser.add_argument("--nprocs", type=int, default=1, help="Number of parallel processes")
 
+    # --- throughflow ---
+    tf_parser = subparsers.add_parser("throughflow", help="Run throughflow (S2m) solver")
+    tf_parser.add_argument("--pr", type=float, default=1.5, help="Pressure ratio")
+    tf_parser.add_argument("--mass-flow", type=float, default=10.0, help="Mass flow rate (kg/s)")
+    tf_parser.add_argument("--rpm", type=float, default=10000.0, help="Rotational speed (RPM)")
+    tf_parser.add_argument("--r-hub", type=float, default=0.1, help="Hub radius (m)")
+    tf_parser.add_argument("--r-tip", type=float, default=0.2, help="Tip radius (m)")
+    tf_parser.add_argument("--n-streamwise", type=int, default=20, help="Number of streamwise stations")
+    tf_parser.add_argument("--n-radial", type=int, default=10, help="Number of radial streamlines")
+
+    # --- smooth ---
+    sm_parser = subparsers.add_parser("smooth", help="Apply Laplacian smoothing to a mesh")
+    sm_parser.add_argument("--input", required=True, help="Input mesh file (CGNS)")
+    sm_parser.add_argument("--iterations", type=int, default=50, help="Smoothing iterations")
+    sm_parser.add_argument("--output", default="smoothed.cgns", help="Output file path")
+
+    # --- database ---
+    db_parser = subparsers.add_parser("database", help="Design database operations")
+    db_sub = db_parser.add_subparsers(dest="db_command")
+    db_sub.add_parser("list", help="List all saved designs")
+    db_save = db_sub.add_parser("save", help="Save a new design")
+    db_save.add_argument("--name", required=True, help="Design name")
+    db_save.add_argument("--params", default="{}", help="Parameters as JSON string")
+    db_export = db_sub.add_parser("export", help="Export designs to CSV")
+    db_export.add_argument("filepath", help="Output CSV file path")
+
+    # --- hpc ---
+    hpc_parser = subparsers.add_parser("hpc", help="HPC job management")
+    hpc_sub = hpc_parser.add_subparsers(dest="hpc_command")
+    hpc_submit = hpc_sub.add_parser("submit", help="Submit a CFD job")
+    hpc_submit.add_argument("case", help="Path to case directory")
+    hpc_submit.add_argument("--backend", choices=["local", "slurm", "pbs"], default="local",
+                            help="HPC backend (default: local)")
+    hpc_submit.add_argument("--nodes", type=int, default=1, help="Number of nodes")
+    hpc_submit.add_argument("--walltime", default="2:00:00", help="Wall time limit (HH:MM:SS)")
+    hpc_status = hpc_sub.add_parser("status", help="Check job status")
+    hpc_status.add_argument("job_id", help="Job ID to check")
+    hpc_cancel = hpc_sub.add_parser("cancel", help="Cancel a running job")
+    hpc_cancel.add_argument("job_id", help="Job ID to cancel")
+
+    # --- sweep ---
+    sw_parser = subparsers.add_parser("sweep", help="Run a parametric sweep")
+    sw_parser.add_argument("--parameter", required=True, help="Parameter name to sweep")
+    sw_parser.add_argument("--start", type=float, required=True, help="Start value")
+    sw_parser.add_argument("--end", type=float, required=True, help="End value")
+    sw_parser.add_argument("--steps", type=int, default=5, help="Number of sweep steps")
+
     # Parse
     args = parser.parse_args()
 
@@ -186,6 +238,16 @@ def main():
         _cmd_multistage(args)
     elif args.command == "run":
         _cmd_run(args)
+    elif args.command == "throughflow":
+        _cmd_throughflow(args)
+    elif args.command == "smooth":
+        _cmd_smooth(args)
+    elif args.command == "database":
+        _cmd_database(args)
+    elif args.command == "hpc":
+        _cmd_hpc(args)
+    elif args.command == "sweep":
+        _cmd_sweep(args)
 
 
 # ────────────────────────────────────────────────────────────────
@@ -741,6 +803,246 @@ def _cmd_run(args):
         else:
             print(f"Solver failed: {result.error_message}")
             sys.exit(1)
+
+
+def _cmd_throughflow(args):
+    """Run the throughflow (S2m) solver."""
+    from astraturbo.solver.throughflow import (
+        ThroughflowSolver, ThroughflowConfig, BladeRowSpec,
+    )
+
+    n_stations = args.n_streamwise
+    n_streamlines = args.n_radial + 1  # +1 because n_radial is cells
+
+    config = ThroughflowConfig(
+        n_stations=n_stations,
+        n_streamlines=n_streamlines,
+        max_iterations=200,
+    )
+    solver = ThroughflowSolver(config)
+
+    # Set up annulus
+    hub_r = np.full(n_stations, args.r_hub)
+    tip_r = np.full(n_stations, args.r_tip)
+    axial = np.linspace(0.0, 0.2, n_stations)
+    solver.set_annulus(hub_r, tip_r, axial)
+
+    # Add a single rotor row
+    omega = args.rpm * 2.0 * np.pi / 60.0
+    rotor = BladeRowSpec(
+        row_type="rotor",
+        n_blades=36,
+        inlet_station=n_stations // 4,
+        outlet_station=n_stations // 2,
+        omega=omega,
+    )
+    solver.add_blade_row(rotor)
+
+    # Set inlet conditions
+    solver.set_inlet_conditions(total_pressure=101325.0, total_temperature=288.15)
+
+    print(f"Running throughflow solver...")
+    print(f"  Pressure ratio target: {args.pr}")
+    print(f"  Mass flow: {args.mass_flow} kg/s")
+    print(f"  RPM: {args.rpm}")
+    print(f"  Hub radius: {args.r_hub} m")
+    print(f"  Tip radius: {args.r_tip} m")
+    print(f"  Stations: {n_stations}")
+    print(f"  Streamlines: {n_streamlines}")
+
+    result = solver.solve()
+
+    print(f"\nResults:")
+    print(f"  Converged: {result.converged}")
+    print(f"  Iterations: {result.n_iterations}")
+    if result.total_pressure is not None and result.total_temperature is not None:
+        pr_actual = result.total_pressure[-1, :].mean() / result.total_pressure[0, :].mean()
+        tr_actual = result.total_temperature[-1, :].mean() / result.total_temperature[0, :].mean()
+        print(f"  Pressure ratio (outlet/inlet): {pr_actual:.4f}")
+        print(f"  Temperature ratio: {tr_actual:.4f}")
+    if result.mach_number is not None:
+        print(f"  Max Mach number: {result.mach_number.max():.4f}")
+    if result.residual_history:
+        print(f"  Final residual: {result.residual_history[-1]:.2e}")
+
+
+def _cmd_smooth(args):
+    """Apply Laplacian smoothing to a mesh file."""
+    from astraturbo.mesh.smoothing import laplacian_smooth
+
+    input_path = Path(args.input)
+    if not input_path.exists():
+        print(f"ERROR: Input file not found: {input_path}")
+        sys.exit(1)
+
+    # Load mesh from CGNS
+    try:
+        import h5py
+        with h5py.File(input_path, "r") as f:
+            # Try to find a zone with grid coordinates
+            print(f"Loading mesh from: {input_path}")
+            # Navigate CGNS structure
+            block = None
+            for base_name in f.keys():
+                base = f[base_name]
+                if isinstance(base, h5py.Group):
+                    for zone_name in base.keys():
+                        zone = base[zone_name]
+                        if isinstance(zone, h5py.Group):
+                            for gc_name in zone.keys():
+                                gc = zone[gc_name]
+                                if isinstance(gc, h5py.Group):
+                                    if "CoordinateX" in gc and "CoordinateY" in gc:
+                                        cx = gc["CoordinateX"][:]
+                                        cy = gc["CoordinateY"][:]
+                                        if cx.ndim == 2:
+                                            ni, nj = cx.shape
+                                            block = np.zeros((ni, nj, 2))
+                                            block[:, :, 0] = cx
+                                            block[:, :, 1] = cy
+                                            break
+                        if block is not None:
+                            break
+                if block is not None:
+                    break
+
+            if block is None:
+                print("ERROR: Could not find 2D coordinate data in CGNS file.")
+                sys.exit(1)
+    except ImportError:
+        print("ERROR: h5py is required to read CGNS files.")
+        print("Install with: pip install h5py")
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: Failed to load mesh: {e}")
+        sys.exit(1)
+
+    print(f"Mesh loaded: {block.shape[0]}x{block.shape[1]} points")
+
+    # Run smoothing
+    smoothed, metrics = laplacian_smooth(block, n_iterations=args.iterations)
+
+    print(f"\nSmoothing results ({args.iterations} iterations):")
+    print(f"  Before: aspect_ratio_max={metrics['before_aspect_ratio_max']:.3f}, "
+          f"skewness_max={metrics['before_skewness_max']:.3f}")
+    print(f"  After:  aspect_ratio_max={metrics['after_aspect_ratio_max']:.3f}, "
+          f"skewness_max={metrics['after_skewness_max']:.3f}")
+
+    # Export smoothed mesh
+    output_path = Path(args.output)
+    try:
+        from astraturbo.export import write_cgns_2d
+        write_cgns_2d(output_path, smoothed)
+        print(f"  Saved smoothed mesh to: {output_path}")
+    except Exception as e:
+        print(f"  Warning: Could not save to CGNS: {e}")
+        # Fallback: save as numpy
+        np_path = output_path.with_suffix(".npy")
+        np.save(np_path, smoothed)
+        print(f"  Saved as numpy: {np_path}")
+
+
+def _cmd_database(args):
+    """Manage the design database."""
+    import json as _json
+    from astraturbo.database.design_db import DesignDatabase
+
+    db = DesignDatabase()
+
+    if args.db_command == "list":
+        designs = db.list_designs()
+        if not designs:
+            print("No designs in database.")
+        else:
+            print(f"Designs ({len(designs)}):")
+            for d in designs:
+                print(f"  [{d['id']}] {d['name']}  "
+                      f"created={d['created_at']}  tags={','.join(d['tags']) if d['tags'] else 'none'}")
+    elif args.db_command == "save":
+        try:
+            params = _json.loads(args.params)
+        except _json.JSONDecodeError as e:
+            print(f"ERROR: Invalid JSON for --params: {e}")
+            sys.exit(1)
+        design_id = db.save_design(name=args.name, parameters=params)
+        print(f"Design saved: ID={design_id}, name='{args.name}'")
+    elif args.db_command == "export":
+        count = db.export_csv(args.filepath)
+        print(f"Exported {count} designs to {args.filepath}")
+    else:
+        print("Usage: astraturbo database {list|save|export}")
+        sys.exit(1)
+
+    db.close()
+
+
+def _cmd_hpc(args):
+    """HPC job management."""
+    from astraturbo.hpc.job_manager import HPCJobManager, HPCConfig, JobStatus
+
+    if args.hpc_command == "submit":
+        config = HPCConfig(
+            backend=args.backend,
+            max_nodes=args.nodes,
+            walltime=args.walltime,
+        )
+        manager = HPCJobManager(config)
+        try:
+            job_id = manager.submit_job(
+                case_dir=args.case,
+                walltime=args.walltime,
+            )
+            print(f"Job submitted: {job_id}")
+            print(f"  Backend: {args.backend}")
+            print(f"  Nodes: {args.nodes}")
+            print(f"  Walltime: {args.walltime}")
+            print(f"  Case: {args.case}")
+        except Exception as e:
+            print(f"ERROR: Job submission failed: {e}")
+            sys.exit(1)
+
+    elif args.hpc_command == "status":
+        manager = HPCJobManager()
+        status = manager.check_status(args.job_id)
+        print(f"Job {args.job_id}: {status.value}")
+
+    elif args.hpc_command == "cancel":
+        manager = HPCJobManager()
+        success = manager.cancel_job(args.job_id)
+        if success:
+            print(f"Job {args.job_id} cancelled.")
+        else:
+            print(f"ERROR: Could not cancel job {args.job_id}")
+            sys.exit(1)
+
+    else:
+        print("Usage: astraturbo hpc {submit|status|cancel}")
+        sys.exit(1)
+
+
+def _cmd_sweep(args):
+    """Run a parametric sweep."""
+    from astraturbo.foundation.design_chain import DesignChain
+
+    chain = DesignChain()
+    print(f"Running parametric sweep:")
+    print(f"  Parameter: {args.parameter}")
+    print(f"  Range: {args.start} to {args.end}")
+    print(f"  Steps: {args.steps}")
+
+    results = chain.sweep(args.parameter, start=args.start, end=args.end, steps=args.steps)
+
+    values = np.linspace(args.start, args.end, args.steps)
+    print(f"\nSweep Results ({len(results)} evaluations):")
+    for i, (val, res) in enumerate(zip(values, results)):
+        status = "OK" if res.success else "FAILED"
+        stage_info = ", ".join(
+            f"{s.stage_name}={s.elapsed_time:.3f}s" for s in res.stages
+        )
+        print(f"  [{i+1}] {args.parameter}={val:.4f} -> {status} ({stage_info})")
+
+    n_success = sum(1 for r in results if r.success)
+    print(f"\nSummary: {n_success}/{len(results)} successful")
 
 
 if __name__ == "__main__":
