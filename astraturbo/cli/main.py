@@ -612,12 +612,18 @@ def _cmd_fea(args):
     )
 
     if args.list_materials:
-        print("Available materials:")
-        for name in list_materials():
-            mat = get_material(name)
-            print(f"  {name:20s}  E={mat.youngs_modulus/1e9:.0f} GPa, "
-                  f"yield={mat.yield_strength/1e6:.0f} MPa, "
-                  f"Tmax={mat.max_service_temperature:.0f} K")
+        from astraturbo.fea.material import list_categories
+        print("Available materials (32):\n")
+        for cat in list_categories():
+            cat_materials = list_materials(category=cat)
+            print(f"  [{cat.upper()}]")
+            for name in cat_materials:
+                mat = get_material(name)
+                print(f"    {name:20s}  E={mat.youngs_modulus/1e9:>6.0f} GPa, "
+                      f"yield={mat.yield_strength/1e6:>5.0f} MPa, "
+                      f"Tmax={mat.max_service_temperature:>5.0f} K  "
+                      f"({mat.description})")
+            print()
         return
 
     try:

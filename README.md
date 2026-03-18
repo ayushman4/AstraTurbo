@@ -570,16 +570,59 @@ write_mesh("output.su2", points, cells)
 
 ## Material Database
 
-6 turbomachinery materials with full mechanical + thermal properties:
+32 aerospace-grade materials across 7 categories:
+
+### Nickel Superalloys (12) — Hot section
 
 | Material | Density | E (GPa) | Yield (MPa) | Max Temp (K) | Use Case |
 |---|---|---|---|---|---|
-| Inconel 718 | 8190 | 200 | 1035 | 973 | HP compressor, LP turbine |
+| Inconel 718 | 8190 | 200 | 1035 | 973 | Compressor disks, LP turbine |
 | Inconel 625 | 8440 | 205 | 758 | 1073 | Combustor, exhaust |
+| Inconel 713C | 7910 | 200 | 740 | 1143 | Small engine turbine blades |
+| Rene 41 | 8250 | 219 | 760 | 1143 | Turbine components |
+| Rene 80 | 8160 | 210 | 690 | 1255 | Cast turbine blades |
+| Rene N5 | 8630 | 131 | 960 | 1383 | Single crystal (GE) |
+| Hastelloy X | 8220 | 205 | 360 | 1473 | Combustors, afterburners |
+| Waspaloy | 8190 | 213 | 795 | 1003 | Disks, shafts |
+| Udimet 720 | 8080 | 222 | 1000 | 1023 | HP compressor disks |
+| CMSX-4 | 8700 | 130 | 950 | 1373 | 1st gen single crystal |
+| PWA 1484 | 8950 | 128 | 1000 | 1393 | 2nd gen single crystal (P&W) |
+| MAR-M-247 | 8540 | 200 | 830 | 1253 | Cast turbine blades/vanes |
+
+### Titanium Alloys (5) — Fan & compressor
+
+| Material | Density | E (GPa) | Yield (MPa) | Max Temp (K) | Use Case |
+|---|---|---|---|---|---|
 | Ti-6Al-4V | 4430 | 114 | 880 | 673 | Fan, LP compressor |
-| CMSX-4 | 8700 | 130 | 950 | 1373 | HP turbine (single crystal) |
-| Steel 17-4PH | 7780 | 197 | 1170 | 623 | Structural components |
-| Al 7075-T6 | 2810 | 72 | 503 | 473 | Low-temp components |
+| Ti-6-2-4-2 | 4540 | 120 | 990 | 813 | Compressor blades, disks |
+| Ti-5553 | 4650 | 110 | 1200 | 623 | Disks, landing gear |
+| IMI 834 | 4550 | 120 | 1000 | 873 | Compressor blades (Rolls-Royce) |
+| Ti-6-2-4-6 | 4650 | 114 | 1100 | 723 | High-strength disks |
+
+### Steels (5) — Shafts & structure
+
+| Material | Density | E (GPa) | Yield (MPa) | Max Temp (K) | Use Case |
+|---|---|---|---|---|---|
+| 17-4PH | 7780 | 197 | 1170 | 623 | Structural components |
+| 15-5PH | 7800 | 196 | 1000 | 623 | Aerospace components |
+| AISI 4340 | 7850 | 205 | 1210 | 673 | Shafts, gears |
+| Maraging 300 | 8000 | 190 | 2000 | 723 | Shafts, critical fasteners |
+| Incoloy 909 | 8310 | 160 | 1000 | 923 | Low-CTE casings, rings |
+
+### Aluminum (2), CMC/Ceramics (3), Coatings (2), Cobalt/Exotic (3)
+
+| Material | Category | Density | Yield (MPa) | Max Temp (K) | Use Case |
+|---|---|---|---|---|---|
+| Al 7075-T6 | aluminum | 2810 | 503 | 473 | Structural, nacelle |
+| Al 2024-T3 | aluminum | 2780 | 345 | 473 | Airframe, inlet |
+| SiC/SiC CMC | cmc | 2350 | 300 | 1588 | Turbine shrouds (GE LEAP) |
+| Oxide/Oxide CMC | cmc | 2800 | 170 | 1473 | Combustor liners |
+| Si3N4 | cmc | 3200 | 700 | 1623 | Bearings, turbocharger |
+| YSZ TBC | coating | 5600 | 50 | 1473 | Thermal insulation |
+| MCrAlY | coating | 7300 | 350 | 1373 | Bond coat (under TBC) |
+| Haynes 188 | cobalt | 8980 | 455 | 1363 | Combustor, transition ducts |
+| Haynes 25/L-605 | cobalt | 9130 | 475 | 1253 | Turbine vanes, afterburner |
+| C-103 Niobium | exotic | 8860 | 350 | 1643 | Rocket nozzles, hypersonics |
 
 ```python
 from astraturbo.fea import get_material, list_materials
