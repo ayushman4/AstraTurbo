@@ -265,3 +265,88 @@ class TestAITools:
         # Inspect a file that doesn't exist — should return error string
         result = execute_tool("inspect_file", {"filepath": "/nonexistent/file.xyz"})
         assert "error" in result.lower() or "Error" in result
+
+
+# ────────────────────────────────────────────────────────────────
+# 4. Material advisor
+# ────────────────────────────────────────────────────────────────
+
+class TestMaterialAdvisor:
+    """Test material selection advisor with engineering validation."""
+
+    def test_fan_blade_selects_titanium(self):
+        """Fan blade at 350 K should recommend Ti-6Al-4V."""
+        from astraturbo.fea.material import recommend_material
+        rec = recommend_material("fan_blade", 350.0)
+        assert rec.primary_material.category == "titanium"
+        assert "ti" in rec.primary_key
+
+    def test_turbine_blade_selects_single_crystal(self):
+        """Turbine blade at 1300 K should recommend a single-crystal alloy."""
+        from astraturbo.fea.material import recommend_material
+        rec = recommend_material("turbine_blade", 1300.0)
+        assert rec.primary_material.category == "nickel"
+        assert rec.primary_material.max_service_temperature >= 1300
+
+    def test_turbine_blade_extreme_temp_selects_cmc(self):
+        """Turbine blade at 1500 K should recommend CMC."""
+        from astraturbo.fea.material import recommend_material
+        rec = recommend_material("turbine_blade", 1500.0)
+        assert rec.primary_material.category == "cmc"
+
+    def test_combustor_liner_gets_coating(self):
+        """Combustor liner should recommend MCrAlY coating."""
+        from astraturbo.fea.material import recommend_material
+        rec = recommend_material("combustor_liner", 1400.0)
+        assert len(rec.coatings) > 0
+        coating_names = [c[0] for c in rec.coatings]
+        assert "mcraly" in coating_names
+
+    def test_shaft_selects_steel(self):
+        """Shaft at 500 K should recommend steel."""
+        from astraturbo.fea.material import recommend_material
+        rec = recommend_material("shaft", 500.0)
+        assert rec.primary_material.category == "steel"
+
+    def test_stress_warning(self):
+        """High stress relative to yield should produce a warning."""
+        from astraturbo.fea.material import recommend_material
+        rec = recommend_material("fan_blade", 350.0, stress_mpa=800.0)
+        assert any("safety" in w.lower() or "Safety" in w for w in rec.warnings)
+
+    def test_temperature_margin_warning(self):
+        """Near-limit temperature should produce a margin warning."""
+        from astraturbo.fea.material import recommend_material
+        # Ti-6Al-4V Tmax=673, operating at 650 → margin=23
+        rec = recommend_material("fan_blade", 650.0)
+        assert any("margin" in w.lower() for w in rec.warnings)
+
+    def test_engine_map_covers_all_sections(self):
+        """recommend_engine_materials should return all major sections."""
+        from astraturbo.fea.material import recommend_engine_materials
+        recs = recommend_engine_materials()
+        expected = {"fan_blade", "compressor_blade", "combustor_liner",
+                    "turbine_blade", "turbine_vane", "shaft", "nozzle"}
+        assert expected.issubset(set(recs.keys()))
+
+    def test_temperature_transition_ordering(self):
+        """Hotter components should get higher-Tmax materials."""
+        from astraturbo.fea.material import recommend_engine_materials
+        recs = recommend_engine_materials(
+            t_fan=350, t_compressor=750, t_combustor=1400, t_turbine=1350
+        )
+        fan_tmax = recs["fan_blade"].primary_material.max_service_temperature
+        turbine_tmax = recs["turbine_blade"].primary_material.max_service_temperature
+        assert turbine_tmax > fan_tmax
+
+    def test_unknown_component_raises(self):
+        """Unknown component should raise ValueError."""
+        from astraturbo.fea.material import recommend_material
+        with pytest.raises(ValueError, match="Unknown component"):
+            recommend_material("landing_gear", 300.0)
+
+    def test_material_count(self):
+        """Database should have 32 materials across 8 categories."""
+        from astraturbo.fea.material import list_materials, list_categories
+        assert len(list_materials()) == 32
+        assert len(list_categories()) == 8

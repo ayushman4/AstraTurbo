@@ -492,3 +492,224 @@ def list_materials(category: str | None = None) -> list[str]:
 def list_categories() -> list[str]:
     """Return list of material categories."""
     return sorted(set(v.category for v in MATERIAL_DATABASE.values()))
+
+
+# =====================================================================
+# Material Selection Advisor
+# =====================================================================
+
+# Engine component → material mapping based on temperature + stress regime
+# Maps: component_type → list of (max_temp_K, recommended_material_keys)
+# Ordered by temperature: lowest first. Advisor picks the first material
+# whose max_service_temperature exceeds the operating temperature.
+
+COMPONENT_MATERIAL_MAP: dict[str, list[tuple[float, str]]] = {
+    "fan_blade": [
+        (673, "ti_6al_4v"),          # Standard fan blade
+        (813, "ti_6242"),            # High-temp fan
+    ],
+    "compressor_blade": [
+        (673, "ti_6al_4v"),          # LP compressor
+        (813, "ti_6242"),            # Mid compressor
+        (873, "imi_834"),            # HP compressor (high-temp Ti)
+        (973, "inconel_718"),        # Rear compressor stages
+    ],
+    "compressor_disk": [
+        (673, "ti_6al_4v"),          # LP disk
+        (723, "ti_6246"),            # Mid disk
+        (973, "inconel_718"),        # HP disk
+        (1023, "udimet_720"),        # Advanced HP disk
+        (1003, "waspaloy"),          # Alternative HP disk
+    ],
+    "turbine_blade": [
+        (1143, "inconel_713c"),      # Small engines, cast
+        (1253, "mar_m_247"),         # Cast polycrystalline
+        (1255, "rene_80"),           # Conventional cast
+        (1373, "cmsx_4"),            # 1st gen single crystal
+        (1383, "rene_n5"),           # 2nd gen single crystal (GE)
+        (1393, "pwa_1484"),          # 2nd gen single crystal (P&W)
+        (1588, "sic_sic_cmc"),       # Next-gen CMC
+    ],
+    "turbine_vane": [
+        (1143, "rene_41"),           # Conventional
+        (1253, "haynes_25"),         # Cobalt-based
+        (1255, "rene_80"),           # Cast Ni
+        (1373, "cmsx_4"),            # Single crystal
+        (1588, "sic_sic_cmc"),       # CMC
+    ],
+    "turbine_disk": [
+        (973, "inconel_718"),        # Standard
+        (1003, "waspaloy"),          # High-temp
+        (1023, "udimet_720"),        # Advanced
+    ],
+    "combustor_liner": [
+        (1073, "inconel_625"),       # Conventional
+        (1363, "haynes_188"),        # Cobalt-based
+        (1473, "hastelloy_x"),       # High oxidation resistance
+        (1473, "oxide_oxide_cmc"),   # Next-gen CMC
+    ],
+    "turbine_shroud": [
+        (1253, "mar_m_247"),         # Conventional
+        (1363, "haynes_188"),        # Cobalt
+        (1588, "sic_sic_cmc"),       # CMC (GE LEAP)
+    ],
+    "shaft": [
+        (623, "steel_17_4ph"),       # Low-temp shaft
+        (673, "aisi_4340"),          # Standard shaft
+        (723, "maraging_300"),       # High-strength shaft
+        (1003, "waspaloy"),          # Hot-section shaft
+    ],
+    "casing": [
+        (623, "steel_15_5ph"),       # LP casing
+        (923, "incoloy_909"),        # Low-CTE matched casing
+        (973, "inconel_718"),        # HP casing
+    ],
+    "nozzle": [
+        (973, "inconel_718"),        # Conventional
+        (1473, "hastelloy_x"),       # High-temp nozzle
+        (1643, "c_103_niobium"),     # Rocket / hypersonic nozzle
+    ],
+    "structural": [
+        (473, "al_7075"),            # Low-temp structure
+        (623, "steel_17_4ph"),       # Moderate-temp structure
+        (673, "ti_6al_4v"),          # Weight-critical structure
+    ],
+}
+
+# Coating recommendations by component
+COATING_MAP: dict[str, list[str]] = {
+    "turbine_blade":   ["mcraly", "ysz_tbc"],
+    "turbine_vane":    ["mcraly", "ysz_tbc"],
+    "combustor_liner": ["mcraly"],
+    "turbine_shroud":  ["ysz_tbc"],
+    "nozzle":          ["mcraly"],
+}
+
+
+@dataclass
+class MaterialRecommendation:
+    """Result of material selection advisor."""
+
+    component: str
+    operating_temperature: float       # K
+    primary_material: Material
+    primary_key: str
+    alternatives: list[tuple[str, Material]]  # (key, material)
+    coatings: list[tuple[str, Material]]      # (key, material)
+    warnings: list[str]
+
+
+def recommend_material(
+    component: str,
+    operating_temperature: float,
+    stress_mpa: float = 0.0,
+) -> MaterialRecommendation:
+    """Recommend materials for a turbomachinery component.
+
+    Selects the best material based on component type, operating
+    temperature, and (optionally) stress level.
+
+    Args:
+        component: Component type. One of: fan_blade, compressor_blade,
+            compressor_disk, turbine_blade, turbine_vane, turbine_disk,
+            combustor_liner, turbine_shroud, shaft, casing, nozzle, structural.
+        operating_temperature: Gas path temperature at this component (K).
+        stress_mpa: Expected stress level (MPa). Used for safety warnings.
+
+    Returns:
+        MaterialRecommendation with primary pick, alternatives, and coatings.
+
+    Raises:
+        ValueError: If component type is unknown.
+    """
+    comp = component.lower().replace(" ", "_").replace("-", "_")
+    if comp not in COMPONENT_MATERIAL_MAP:
+        available = ", ".join(sorted(COMPONENT_MATERIAL_MAP.keys()))
+        raise ValueError(f"Unknown component '{component}'. Available: {available}")
+
+    candidates = COMPONENT_MATERIAL_MAP[comp]
+    warnings: list[str] = []
+
+    # Find the first material whose max temp exceeds operating temp
+    primary_key = candidates[-1][1]  # fallback to highest-temp option
+    for max_temp, mat_key in candidates:
+        if max_temp >= operating_temperature:
+            primary_key = mat_key
+            break
+    else:
+        warnings.append(
+            f"Operating temperature {operating_temperature:.0f} K exceeds all "
+            f"candidate materials for {comp}. Using highest-rated option."
+        )
+
+    primary = MATERIAL_DATABASE[primary_key]
+
+    # Temperature margin check
+    margin = primary.max_service_temperature - operating_temperature
+    if margin < 50:
+        warnings.append(
+            f"Temperature margin only {margin:.0f} K — consider a higher-rated material."
+        )
+
+    # Stress check
+    if stress_mpa > 0 and stress_mpa > primary.yield_strength / 1e6 * 0.67:
+        safety = primary.yield_strength / 1e6 / stress_mpa
+        warnings.append(
+            f"Safety factor only {safety:.2f} (below typical 1.5 minimum for "
+            f"{stress_mpa:.0f} MPa at yield={primary.yield_strength/1e6:.0f} MPa)."
+        )
+
+    # Collect alternatives (other candidates that could work)
+    alternatives: list[tuple[str, Material]] = []
+    for max_temp, mat_key in candidates:
+        if mat_key != primary_key and max_temp >= operating_temperature:
+            alternatives.append((mat_key, MATERIAL_DATABASE[mat_key]))
+
+    # Coating recommendations
+    coatings: list[tuple[str, Material]] = []
+    if comp in COATING_MAP:
+        for coat_key in COATING_MAP[comp]:
+            coatings.append((coat_key, MATERIAL_DATABASE[coat_key]))
+
+    return MaterialRecommendation(
+        component=comp,
+        operating_temperature=operating_temperature,
+        primary_material=primary,
+        primary_key=primary_key,
+        alternatives=alternatives,
+        coatings=coatings,
+        warnings=warnings,
+    )
+
+
+def recommend_engine_materials(
+    t_fan: float = 350.0,
+    t_compressor: float = 750.0,
+    t_combustor: float = 1400.0,
+    t_turbine: float = 1350.0,
+    t_nozzle: float = 1000.0,
+) -> dict[str, MaterialRecommendation]:
+    """Recommend materials for all major engine sections.
+
+    Args:
+        t_fan: Fan inlet temperature (K).
+        t_compressor: HP compressor exit temperature (K).
+        t_combustor: Combustor liner temperature (K).
+        t_turbine: Turbine inlet temperature (K).
+        t_nozzle: Nozzle temperature (K).
+
+    Returns:
+        Dict mapping component name to MaterialRecommendation.
+    """
+    return {
+        "fan_blade": recommend_material("fan_blade", t_fan),
+        "compressor_blade": recommend_material("compressor_blade", t_compressor),
+        "compressor_disk": recommend_material("compressor_disk", t_compressor),
+        "combustor_liner": recommend_material("combustor_liner", t_combustor),
+        "turbine_blade": recommend_material("turbine_blade", t_turbine),
+        "turbine_vane": recommend_material("turbine_vane", t_turbine),
+        "turbine_disk": recommend_material("turbine_disk", min(t_turbine, 1000)),
+        "turbine_shroud": recommend_material("turbine_shroud", t_turbine),
+        "shaft": recommend_material("shaft", min(t_compressor, 700)),
+        "nozzle": recommend_material("nozzle", t_nozzle),
+    }

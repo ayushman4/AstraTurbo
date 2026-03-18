@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 
-# Default database path
+# Default database path (can be overridden with ASTRATURBO_DB_PATH env var)
 DEFAULT_DB_DIR = Path.home() / ".astraturbo"
 DEFAULT_DB_PATH = DEFAULT_DB_DIR / "designs.db"
 
@@ -76,7 +76,7 @@ class DesignDatabase:
                 the default path at ~/.astraturbo/designs.db.
         """
         if db_path is None:
-            db_path = DEFAULT_DB_PATH
+            db_path = os.environ.get("ASTRATURBO_DB_PATH", str(DEFAULT_DB_PATH))
 
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1268,10 +1268,17 @@ class MainWindow(QMainWindow):
                 if not designs:
                     QMessageBox.information(self, "Design Database", "No designs in database.")
                 else:
-                    lines = [f"Designs ({len(designs)}):"]
+                    lines = [f"Designs ({len(designs)}):\n"]
                     for d in designs:
-                        tags = ",".join(d["tags"]) if d["tags"] else "none"
-                        lines.append(f"[{d['id']}] {d['name']}  tags={tags}")
+                        tags = ", ".join(d["tags"]) if d["tags"] else ""
+                        params = d.get("parameters", {})
+                        param_str = ", ".join(f"{k}={v}" for k, v in params.items()) if params else ""
+                        line = f"[{d['id']}] {d['name']}"
+                        if param_str:
+                            line += f"  ({param_str})"
+                        if tags:
+                            line += f"  [{tags}]"
+                        lines.append(line)
                     QMessageBox.information(self, "Design Database", "\n".join(lines))
 
             elif action == "Save current design":

@@ -145,6 +145,20 @@ def main():
     # --- formats ---
     subparsers.add_parser("formats", help="List all supported file formats")
 
+    # --- material-advisor ---
+    ma_parser = subparsers.add_parser("material-advisor", help="Recommend materials for engine components")
+    ma_parser.add_argument("--component", default=None,
+                           help="Component type (fan_blade, turbine_blade, combustor_liner, ...)")
+    ma_parser.add_argument("--temperature", type=float, default=None, help="Operating temperature (K)")
+    ma_parser.add_argument("--stress", type=float, default=0.0, help="Expected stress (MPa)")
+    ma_parser.add_argument("--engine", action="store_true",
+                           help="Show full engine material map with default temperatures")
+    ma_parser.add_argument("--t-fan", type=float, default=350.0, help="Fan temperature (K)")
+    ma_parser.add_argument("--t-compressor", type=float, default=750.0, help="HP compressor exit temp (K)")
+    ma_parser.add_argument("--t-combustor", type=float, default=1400.0, help="Combustor liner temp (K)")
+    ma_parser.add_argument("--t-turbine", type=float, default=1350.0, help="Turbine inlet temp (K)")
+    ma_parser.add_argument("--t-nozzle", type=float, default=1000.0, help="Nozzle temp (K)")
+
     # --- multistage ---
     ms_parser = subparsers.add_parser("multistage", help="Generate multi-stage mesh")
     ms_parser.add_argument("--profiles", nargs="+", required=True, help="Profile CSVs (one per row)")
@@ -256,6 +270,8 @@ def main():
         _cmd_yplus(args)
     elif args.command == "formats":
         _cmd_formats()
+    elif args.command == "material-advisor":
+        _cmd_material_advisor(args)
     elif args.command == "multistage":
         _cmd_multistage(args)
     elif args.command == "run":
@@ -753,6 +769,94 @@ def _cmd_formats():
         rw = ("R" if info["read"] else "-") + ("W" if info["write"] else "-")
         exts = ", ".join(info["extensions"])
         print(f"  [{rw}] {name:22s} {exts:28s} {info['description']}")
+
+
+def _cmd_material_advisor(args):
+    """Recommend materials for engine components."""
+    from astraturbo.fea.material import (
+        recommend_material, recommend_engine_materials,
+        COMPONENT_MATERIAL_MAP,
+    )
+
+    if args.engine:
+        # Full engine material map
+        recs = recommend_engine_materials(
+            t_fan=args.t_fan,
+            t_compressor=args.t_compressor,
+            t_combustor=args.t_combustor,
+            t_turbine=args.t_turbine,
+            t_nozzle=args.t_nozzle,
+        )
+        print("Engine Material Map")
+        print("=" * 80)
+        print(f"  Fan inlet:    {args.t_fan:.0f} K")
+        print(f"  Compressor:   {args.t_compressor:.0f} K")
+        print(f"  Combustor:    {args.t_combustor:.0f} K")
+        print(f"  Turbine:      {args.t_turbine:.0f} K")
+        print(f"  Nozzle:       {args.t_nozzle:.0f} K")
+        print()
+
+        for comp, rec in recs.items():
+            mat = rec.primary_material
+            margin = mat.max_service_temperature - rec.operating_temperature
+            coats = ", ".join(c[1].name for c in rec.coatings) if rec.coatings else "none"
+            print(f"  {comp:22s}  {rec.primary_key:16s}  "
+                  f"Tmax={mat.max_service_temperature:>5.0f} K  "
+                  f"margin={margin:>+4.0f} K  "
+                  f"coatings: {coats}")
+            for w in rec.warnings:
+                print(f"    WARNING: {w}")
+
+        print(f"\n{'=' * 80}")
+        print("Temperature transitions:")
+        print("  [Fan] Ti --> [Compressor] Ti/Ni --> [Combustor] Ni/Co "
+              "--> [Turbine] SC Ni/CMC --> [Nozzle] Ni")
+
+    elif args.component and args.temperature:
+        rec = recommend_material(args.component, args.temperature, args.stress)
+        mat = rec.primary_material
+        margin = mat.max_service_temperature - rec.operating_temperature
+
+        print(f"Material Recommendation")
+        print(f"  Component:    {rec.component}")
+        print(f"  Temperature:  {rec.operating_temperature:.0f} K")
+        if args.stress > 0:
+            print(f"  Stress:       {args.stress:.0f} MPa")
+        print()
+        print(f"  Primary:      {rec.primary_key}")
+        print(f"    {mat.name}: {mat.category}")
+        print(f"    E={mat.youngs_modulus/1e9:.0f} GPa, "
+              f"yield={mat.yield_strength/1e6:.0f} MPa, "
+              f"Tmax={mat.max_service_temperature:.0f} K")
+        print(f"    Margin: {margin:+.0f} K")
+        print(f"    {mat.description}")
+
+        if rec.alternatives:
+            print(f"\n  Alternatives:")
+            for key, alt in rec.alternatives:
+                print(f"    {key:20s}  Tmax={alt.max_service_temperature:.0f} K  "
+                      f"({alt.description})")
+
+        if rec.coatings:
+            print(f"\n  Recommended coatings:")
+            for key, coat in rec.coatings:
+                print(f"    {key:20s}  k={coat.thermal_conductivity:.1f} W/mK  "
+                      f"({coat.description})")
+
+        for w in rec.warnings:
+            print(f"\n  WARNING: {w}")
+
+    else:
+        print("Usage:")
+        print("  astraturbo material-advisor --engine")
+        print("  astraturbo material-advisor --engine --t-turbine 1500")
+        print("  astraturbo material-advisor --component turbine_blade --temperature 1350")
+        print("  astraturbo material-advisor --component shaft --temperature 700 --stress 500")
+        print()
+        print("Available components:")
+        for comp in sorted(COMPONENT_MATERIAL_MAP.keys()):
+            print(f"  {comp}")
+        sys.exit(1)
 
 
 def _cmd_multistage(args):
