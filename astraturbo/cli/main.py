@@ -186,6 +186,12 @@ def main():
     turb_parser.add_argument("--inlet-temp", type=float, default=1500.0, help="Inlet total temperature (K)")
     turb_parser.add_argument("--inlet-pressure", type=float, default=101325.0, help="Inlet total pressure (Pa)")
     turb_parser.add_argument("--radial-stations", type=int, default=3, help="Radial stations for free-vortex")
+    turb_parser.add_argument("--off-design", action="store_true",
+                             help="Run single off-design point at given conditions")
+    turb_parser.add_argument("--map", action="store_true",
+                             help="Generate full turbine map and print speed line table")
+    turb_parser.add_argument("--rpm-fractions", type=str, default="0.5,0.6,0.7,0.8,0.9,0.95,1.0,1.05",
+                             help="Comma-separated RPM fractions for map (default: 0.5,0.6,...,1.05)")
     turb_parser.add_argument("--report", type=str, default=None, help="Generate HTML report to this file")
 
     # --- fea ---
@@ -331,6 +337,11 @@ def main():
     ec_parser.add_argument("--r-hub", type=float, default=0.15, help="Hub radius (m)")
     ec_parser.add_argument("--r-tip", type=float, default=0.30, help="Tip radius (m)")
     ec_parser.add_argument("--compressor-type", choices=["axial", "centrifugal"], default="axial", help="Compressor type")
+    ec_parser.add_argument("--n-spools", type=int, default=1, choices=[1, 2], help="Number of spools (1=single, 2=twin)")
+    ec_parser.add_argument("--hp-pr", type=float, default=None, help="HP spool pressure ratio (twin-spool; default sqrt(OPR))")
+    ec_parser.add_argument("--hp-rpm", type=float, default=None, help="HP spool RPM (twin-spool; default rpm*1.3)")
+    ec_parser.add_argument("--hp-r-hub", type=float, default=None, help="HP blade hub radius (twin-spool; default r_hub*0.8)")
+    ec_parser.add_argument("--hp-r-tip", type=float, default=None, help="HP blade tip radius (twin-spool; default r_tip*0.8)")
     ec_parser.add_argument("--report", type=str, default=None, help="Generate HTML report to this file")
 
     # Parse
@@ -919,6 +930,40 @@ def _cmd_turbine(args):
               f"solidity={p['rotor_solidity']:.2f}")
         print(f"    Zweifel = {p['zweifel']:.3f}")
 
+    # Off-design analysis
+    if getattr(args, 'off_design', False):
+        from astraturbo.design.turbine_off_design import turbine_off_design
+        print()
+        print("=" * 60)
+        print("Turbine Off-Design Analysis (same conditions as design point):")
+        print("=" * 60)
+        od_result = turbine_off_design(
+            result, mass_flow=args.mass_flow, rpm=args.rpm,
+        )
+        print(od_result.summary())
+
+    # Turbine map generation
+    if getattr(args, 'map', False):
+        from astraturbo.design.turbine_off_design import generate_turbine_map
+        print()
+        print("=" * 60)
+        print("Generating Turbine Map...")
+        print("=" * 60)
+        rpm_fracs = [float(x) for x in args.rpm_fractions.split(",")]
+        tmap = generate_turbine_map(
+            result, rpm_fractions=rpm_fracs,
+        )
+        print(tmap.summary())
+
+        # Choke margin at design speed
+        for sl in tmap.speed_lines:
+            if abs(sl.rpm_fraction - 1.0) < 0.01 and sl.choke_point_index is not None:
+                choke_er = sl.expansion_ratios[sl.choke_point_index]
+                design_er = tmap.design_point.get("er", 1.0)
+                if design_er > 1.0:
+                    cm = (choke_er - design_er) / design_er
+                    print(f"\nChoke margin at design speed: {cm:.4f} ({cm*100:.1f}%)")
+
     # Report
     report_path = getattr(args, 'report', None)
     if report_path:
@@ -927,7 +972,21 @@ def _cmd_turbine(args):
             title=f"Axial Turbine — ER {args.expansion_ratio}",
             output_path=report_path,
         )
-        generate_report(config=cfg, turbine_result=result)
+        # Collect off-design results for report
+        od_result = None
+        tmap_result = None
+        if getattr(args, 'off_design', False):
+            from astraturbo.design.turbine_off_design import turbine_off_design as _tod
+            od_result = _tod(result, mass_flow=args.mass_flow, rpm=args.rpm)
+        if getattr(args, 'map', False):
+            from astraturbo.design.turbine_off_design import generate_turbine_map as _gtm
+            rpm_fracs = [float(x) for x in args.rpm_fractions.split(",")]
+            tmap_result = _gtm(result, rpm_fractions=rpm_fracs)
+        generate_report(
+            config=cfg, turbine_result=result,
+            turbine_off_design_result=od_result,
+            turbine_map=tmap_result,
+        )
         print(f"\nReport generated: {report_path}")
 
 
@@ -946,6 +1005,11 @@ def _cmd_engine_cycle(args):
         r_hub=args.r_hub,
         r_tip=args.r_tip,
         compressor_type=args.compressor_type,
+        n_spools=args.n_spools,
+        hp_pressure_ratio=args.hp_pr,
+        hp_rpm=args.hp_rpm,
+        hp_r_hub=args.hp_r_hub,
+        hp_r_tip=args.hp_r_tip,
     )
 
     print(result.summary())

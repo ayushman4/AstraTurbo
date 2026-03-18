@@ -284,6 +284,40 @@ class TestDialogs:
         assert ogrid_config.n_ogrid_normal == 10
 
 
+class TestDesignExplorer:
+    """Test Design Explorer dialog initializes without errors."""
+
+    def test_dialog_creates(self, qapp):
+        from astraturbo.gui.design_explorer import DesignExplorerDialog
+
+        dlg = DesignExplorerDialog()
+        assert dlg.windowTitle() == "Design Space Explorer"
+        assert dlg._mode.currentText() == "Compressor"
+        assert dlg._debounce is not None
+        dlg.close()
+
+    def test_mode_switch(self, qapp):
+        from astraturbo.gui.design_explorer import DesignExplorerDialog
+
+        dlg = DesignExplorerDialog()
+        dlg._mode.setCurrentText("Turbine")
+        assert dlg._mode.currentText() == "Turbine"
+        # TIT slider should not be hidden in turbine mode
+        assert not dlg._sliders["tit"][0].isHidden()
+        # Altitude slider should be hidden in turbine mode (cycle-only)
+        assert dlg._sliders["altitude"][0].isHidden()
+        dlg.close()
+
+    def test_all_modes(self, qapp):
+        from astraturbo.gui.design_explorer import DesignExplorerDialog
+
+        dlg = DesignExplorerDialog()
+        for mode in ["Compressor", "Turbine", "Engine Cycle"]:
+            dlg._mode.setCurrentText(mode)
+            assert dlg._mode.currentText() == mode
+        dlg.close()
+
+
 # ────────────────────────────────────────────────────────────────
 # 8. AI chat panel
 # ────────────────────────────────────────────────────────────────

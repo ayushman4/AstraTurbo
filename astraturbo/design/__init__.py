@@ -50,6 +50,13 @@ from .turbine import (
     meanline_turbine,
     meanline_to_turbine_blade_parameters,
 )
+from .turbine_off_design import (
+    TurbineOffDesignResult,
+    turbine_off_design,
+    TurbineSpeedLine,
+    TurbineMap,
+    generate_turbine_map,
+)
 from .engine_cycle import (
     InletResult,
     CombustorResult,
@@ -86,6 +93,11 @@ __all__ = [
     "TurbineResult",
     "meanline_turbine",
     "meanline_to_turbine_blade_parameters",
+    "TurbineOffDesignResult",
+    "turbine_off_design",
+    "TurbineSpeedLine",
+    "TurbineMap",
+    "generate_turbine_map",
     "InletResult",
     "CombustorResult",
     "NozzleResult",

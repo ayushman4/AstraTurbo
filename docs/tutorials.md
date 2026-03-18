@@ -573,7 +573,49 @@ generate_report(
 ### From the GUI
 
 **Compute > Turbine Meanline...** — enter expansion ratio, mass flow, RPM,
-hub/tip radii, and inlet temperature. Optionally save an HTML report.
+hub/tip radii, and inlet temperature. Check "Generate Turbine Map" for a
+performance map with speed lines and choke boundaries. Optionally save an HTML report.
+
+### Turbine off-design analysis
+
+Analyse a turbine at conditions different from the design point. Blade metal angles
+are fixed; flow angles change, creating incidence and modified losses.
+
+```bash
+# Off-design at design conditions (validation)
+python -m astraturbo turbine --expansion-ratio 2.5 --mass-flow 20 --rpm 17189 \
+  --r-hub 0.25 --r-tip 0.35 --inlet-temp 1500 --off-design
+
+# Generate a turbine performance map
+python -m astraturbo turbine --expansion-ratio 2.5 --mass-flow 20 --rpm 17189 \
+  --r-hub 0.25 --r-tip 0.35 --inlet-temp 1500 --map
+```
+
+```python
+from astraturbo.design import meanline_turbine, turbine_off_design, generate_turbine_map
+
+# Design point
+result = meanline_turbine(
+    overall_expansion_ratio=2.5, mass_flow=20.0, rpm=17189,
+    r_hub=0.25, r_tip=0.35, T_inlet=1500.0,
+)
+
+# Off-design at 80% RPM
+od = turbine_off_design(result, mass_flow=18.0, rpm=13751)
+print(od.summary())  # Shows ER, eta, incidence, nozzle Mach, choke status
+
+# Full performance map
+tmap = generate_turbine_map(result)
+print(tmap.summary())  # Speed lines with choke detection
+```
+
+### Design Space Explorer
+
+The **Design Space Explorer** (`Tools > Design Explorer...`) provides interactive
+sliders for PR/ER, mass flow, RPM, TIT, altitude, and Mach number. Results update
+in real-time as you drag sliders, with a 300ms debounce to keep the UI responsive.
+Supports Compressor, Turbine, and Engine Cycle modes. Export current parameters to
+an HTML report with one click.
 
 ---
 
@@ -638,6 +680,37 @@ generate_report(
 
 **Compute > Engine Cycle...** — select engine type, enter OPR, TIT, mass flow,
 RPM, radii, altitude, and Mach number. Optionally save an HTML report.
+
+### Multi-spool (twin-spool) engines
+
+For twin-spool engines like the Kaveri (GTX-35VS), use `n_spools=2`.
+The OPR is automatically split between LP and HP compressors:
+
+```bash
+# Twin-spool Kaveri-class turbojet
+python -m astraturbo engine-cycle --opr 20 --tit 1700 --mass-flow 20 --rpm 10000 \
+  --n-spools 2 --hp-pr 4.5 --hp-rpm 15000
+```
+
+```python
+from astraturbo.design import engine_cycle
+
+result = engine_cycle(
+    engine_type="turbojet",
+    overall_pressure_ratio=20.0,
+    turbine_inlet_temp=1700.0,
+    mass_flow=20.0,
+    rpm=10000, r_hub=0.15, r_tip=0.30,
+    n_spools=2,
+    hp_pressure_ratio=4.5,
+    hp_rpm=15000,
+)
+print(result.summary())
+
+# Per-spool breakdown
+for sp in result.spools:
+    print(f"  {sp['name']}: PR={sp['pr']:.1f}, RPM={sp['rpm']:.0f}")
+```
 
 ---
 

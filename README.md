@@ -42,7 +42,7 @@ python -m astraturbo --version
 # astraturbo 0.1.0
 
 python -m pytest tests/ -q
-# 474+ passed
+# 489+ passed
 ```
 
 ---
@@ -225,6 +225,14 @@ python -m astraturbo turbine --expansion-ratio 3.0 --mass-flow 20 --rpm 12000 \
 # With HTML report
 python -m astraturbo turbine --expansion-ratio 2.5 --mass-flow 20 --rpm 17189 \
   --r-hub 0.25 --r-tip 0.35 --inlet-temp 1500 --report turbine_report.html
+
+# Off-design analysis (same geometry, different operating point)
+python -m astraturbo turbine --expansion-ratio 2.5 --mass-flow 20 --rpm 17189 \
+  --r-hub 0.25 --r-tip 0.35 --inlet-temp 1500 --off-design
+
+# Generate turbine performance map
+python -m astraturbo turbine --expansion-ratio 2.5 --mass-flow 20 --rpm 17189 \
+  --r-hub 0.25 --r-tip 0.35 --inlet-temp 1500 --map
 ```
 
 ### Engine cycle analysis
@@ -241,6 +249,10 @@ python -m astraturbo engine-cycle --engine-type turbojet --opr 20 --tit 1700 \
 # Turboshaft for helicopter
 python -m astraturbo engine-cycle --engine-type turboshaft --opr 8 --tit 1400 \
   --mass-flow 10 --rpm 30000 --r-hub 0.05 --r-tip 0.10 --compressor-type centrifugal
+
+# Twin-spool turbojet (Kaveri-class)
+python -m astraturbo engine-cycle --opr 20 --tit 1700 --mass-flow 20 --rpm 10000 \
+  --n-spools 2 --hp-pr 4.5 --hp-rpm 15000
 ```
 
 ### Design reports
@@ -642,7 +654,7 @@ print(response2)
 assistant.reset()
 ```
 
-Claude calls 23 AstraTurbo tools directly —
+Claude calls 25 AstraTurbo tools directly —
 meanline design (axial compressor + centrifugal + turbine), engine cycle analysis
 (turbojet/turboshaft), off-design analysis,
 compressor maps, profile generation, 3D blade building, mesh generation and export,
@@ -661,7 +673,7 @@ export ANTHROPIC_API_KEY=sk-ant-api03-...
 
 ```
 astraturbo/
-├── ai/              Claude-powered AI assistant (23 tools, NL interface)
+├── ai/              Claude-powered AI assistant (25 tools, NL interface)
 ├── design/          Velocity triangles, meanline (axial compressor + centrifugal + turbine), engine cycle, off-design, compressor maps
 ├── foundation/      Property system, signals, undo/redo, serialization
 ├── baseclass/       ATObject, Node tree, Drawable mixin

@@ -181,6 +181,8 @@ class MainWindow(QMainWindow):
         tools_menu.addSeparator()
         self._add_action(tools_menu, "&Design Database...", self._open_design_database)
         self._add_action(tools_menu, "&HPC Job Manager...", self._open_hpc_manager)
+        tools_menu.addSeparator()
+        self._add_action(tools_menu, "Design &Explorer...", self._open_design_explorer)
 
         # --- Help menu ---
         help_menu = menubar.addMenu("&Help")
@@ -1028,7 +1030,7 @@ class MainWindow(QMainWindow):
 
     def _run_turbine_meanline(self) -> None:
         """Run axial turbine meanline design from a dialog."""
-        from PySide6.QtWidgets import QInputDialog, QFileDialog
+        from PySide6.QtWidgets import QInputDialog, QFileDialog, QCheckBox, QDialog, QVBoxLayout, QDialogButtonBox
 
         er, ok = QInputDialog.getDouble(self, "Turbine", "Expansion Ratio (P_in/P_out):", 2.5, 1.1, 20.0, 2)
         if not ok:
@@ -1049,6 +1051,20 @@ class MainWindow(QMainWindow):
         if not ok:
             return
 
+        # Ask whether to generate turbine map
+        generate_map = False
+        map_dlg = QDialog(self)
+        map_dlg.setWindowTitle("Turbine Map")
+        layout = QVBoxLayout(map_dlg)
+        map_cb = QCheckBox("Generate Turbine Map")
+        layout.addWidget(map_cb)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(map_dlg.accept)
+        buttons.rejected.connect(map_dlg.reject)
+        layout.addWidget(buttons)
+        if map_dlg.exec() == QDialog.Accepted:
+            generate_map = map_cb.isChecked()
+
         try:
             from ..design.turbine import meanline_turbine
             result = meanline_turbine(
@@ -1057,6 +1073,13 @@ class MainWindow(QMainWindow):
             )
 
             summary = result.summary()
+
+            # Turbine map generation
+            if generate_map:
+                from ..design.turbine_off_design import generate_turbine_map
+                tmap = generate_turbine_map(result)
+                summary += "\n\n" + tmap.summary()
+
             QMessageBox.information(self, "Turbine Design", summary)
             self.statusBar().showMessage(
                 f"Turbine: ER={result.overall_expansion_ratio:.3f}, "
@@ -1075,7 +1098,11 @@ class MainWindow(QMainWindow):
                 if path:
                     from ..reports import generate_report, ReportConfig
                     cfg = ReportConfig(title=f"Axial Turbine — ER {er}", output_path=path)
-                    generate_report(config=cfg, turbine_result=result)
+                    tmap_result = None
+                    if generate_map:
+                        from ..design.turbine_off_design import generate_turbine_map as _gtm
+                        tmap_result = _gtm(result)
+                    generate_report(config=cfg, turbine_result=result, turbine_map=tmap_result)
                     self.statusBar().showMessage(f"Report saved: {path}")
         except Exception as e:
             QMessageBox.warning(self, "Turbine Error", f"{e}\n\n{traceback.format_exc()}")
@@ -1125,6 +1152,39 @@ class MainWindow(QMainWindow):
         if not ok:
             return
 
+        # Multi-spool options
+        n_spools, ok = QInputDialog.getInt(self, "Engine Cycle", "Number of Spools (1 or 2):", 1, 1, 2, 1)
+        if not ok:
+            return
+
+        hp_pr = None
+        hp_rpm_val = None
+        hp_r_hub_val = None
+        hp_r_tip_val = None
+        if n_spools == 2:
+            import math as _math
+            default_hp_pr = _math.sqrt(opr)
+            hp_pr, ok = QInputDialog.getDouble(
+                self, "Engine Cycle", f"HP Pressure Ratio (default √OPR={default_hp_pr:.1f}):",
+                default_hp_pr, 1.1, opr, 2)
+            if not ok:
+                return
+            hp_rpm_val, ok = QInputDialog.getDouble(
+                self, "Engine Cycle", f"HP RPM (default {rpm * 1.3:.0f}):",
+                rpm * 1.3, 500, 200000, 0)
+            if not ok:
+                return
+            hp_r_hub_val, ok = QInputDialog.getDouble(
+                self, "Engine Cycle", f"HP Hub Radius (default {r_hub * 0.8:.3f} m):",
+                r_hub * 0.8, 0.01, 5.0, 3)
+            if not ok:
+                return
+            hp_r_tip_val, ok = QInputDialog.getDouble(
+                self, "Engine Cycle", f"HP Tip Radius (default {r_tip * 0.8:.3f} m):",
+                r_tip * 0.8, 0.02, 5.0, 3)
+            if not ok:
+                return
+
         try:
             from ..design.engine_cycle import engine_cycle
             result = engine_cycle(
@@ -1137,6 +1197,11 @@ class MainWindow(QMainWindow):
                 rpm=rpm,
                 r_hub=r_hub,
                 r_tip=r_tip,
+                n_spools=n_spools,
+                hp_pressure_ratio=hp_pr,
+                hp_rpm=hp_rpm_val,
+                hp_r_hub=hp_r_hub_val,
+                hp_r_tip=hp_r_tip_val,
             )
 
             QMessageBox.information(self, "Engine Cycle", result.summary())
@@ -2005,6 +2070,16 @@ class MainWindow(QMainWindow):
             db.close()
         except Exception as e:
             QMessageBox.warning(self, "Database Error", f"{e}\n\n{traceback.format_exc()}")
+
+    # ----------------------------------------------------------------
+    # Design Explorer
+    # ----------------------------------------------------------------
+
+    def _open_design_explorer(self) -> None:
+        """Open the Design Space Explorer dialog."""
+        from .design_explorer import DesignExplorerDialog
+        dlg = DesignExplorerDialog(self)
+        dlg.exec()
 
     # ----------------------------------------------------------------
     # HPC Job Manager

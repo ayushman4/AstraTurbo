@@ -317,6 +317,12 @@ class EngineCycleResult:
     turbine: TurbineResult | None = None
     nozzle: NozzleResult | None = None
 
+    # Multi-spool component results (twin-spool only)
+    lp_compressor: Union[MeanlineResult, CentrifugalResult, None] = None
+    hp_compressor: Union[MeanlineResult, CentrifugalResult, None] = None
+    hp_turbine: TurbineResult | None = None
+    lp_turbine: TurbineResult | None = None
+
     # Station conditions (P_total, T_total at each station)
     stations: dict = field(default_factory=dict)
 
@@ -335,10 +341,15 @@ class EngineCycleResult:
     turbine_work: float = 0.0         # J/kg
     mechanical_efficiency: float = 0.99
 
+    # Multi-spool
+    n_spools: int = 1
+    spools: list = field(default_factory=list)
+
     def summary(self) -> str:
         """Human-readable engine cycle summary."""
         lines = [
-            f"Engine Cycle Analysis — {self.engine_type.upper()}",
+            f"Engine Cycle Analysis — {self.engine_type.upper()}"
+            + (f" ({self.n_spools}-spool)" if self.n_spools > 1 else ""),
             "=" * 50,
         ]
 
@@ -362,6 +373,16 @@ class EngineCycleResult:
             lines.append(f"    Propulsive:    {self.propulsive_efficiency:.4f}")
         lines.append(f"    Overall:       {self.overall_efficiency:.4f}")
         lines.append("")
+
+        if self.n_spools > 1 and self.spools:
+            lines.append("  Spool Breakdown:")
+            for sp in self.spools:
+                lines.append(f"    {sp['name']}:")
+                lines.append(f"      RPM:             {sp['rpm']:.0f}")
+                lines.append(f"      Pressure Ratio:  {sp['pr']:.2f}")
+                lines.append(f"      Compressor Work: {sp['compressor_work']:.0f} J/kg")
+                lines.append(f"      Turbine Work:    {sp['turbine_work']:.0f} J/kg")
+            lines.append("")
 
         lines.append("  Power Balance:")
         lines.append(f"    Compressor:    {self.compressor_work:.0f} J/kg")
@@ -406,6 +427,12 @@ def engine_cycle(
     eta_poly_turbine: float = 0.90,
     compressor_reaction: float = 0.5,
     turbine_reaction: float = 0.5,
+    # Multi-spool parameters
+    n_spools: int = 1,
+    hp_pressure_ratio: float | None = None,
+    hp_rpm: float | None = None,
+    hp_r_hub: float | None = None,
+    hp_r_tip: float | None = None,
 ) -> EngineCycleResult:
     """Run a complete gas turbine cycle analysis.
 
@@ -444,6 +471,12 @@ def engine_cycle(
         eta_poly_turbine: Turbine polytropic efficiency.
         compressor_reaction: Compressor stage reaction.
         turbine_reaction: Turbine stage reaction.
+        n_spools: Number of spools (1 = single-spool, 2 = twin-spool).
+        hp_pressure_ratio: HP spool pressure ratio (twin-spool only;
+            default: sqrt(OPR), LP gets OPR / HP_PR).
+        hp_rpm: HP spool RPM (default: rpm × 1.3).
+        hp_r_hub: HP blade hub radius (default: r_hub × 0.8).
+        hp_r_tip: HP blade tip radius (default: r_tip × 0.8).
 
     Returns:
         EngineCycleResult with full station-by-station breakdown.
@@ -453,6 +486,8 @@ def engine_cycle(
         engine_type, overall_pressure_ratio, turbine_inlet_temp,
         mass_flow, rpm, altitude, mach_flight,
     )
+    if n_spools not in (1, 2):
+        raise ValueError(f"n_spools must be 1 or 2, got {n_spools}")
 
     # 2. Ambient conditions
     T_amb, P_amb, _rho = standard_atmosphere(altitude)
@@ -466,23 +501,27 @@ def engine_cycle(
         T_total=inlet_res.T_total_out,
     )
 
-    # 4. Compressor
     gas_cold = GasProperties(gamma=gamma_cold, cp=cp_cold)
-    if compressor_type == "centrifugal":
-        comp_result = centrifugal_compressor(
-            pressure_ratio=overall_pressure_ratio,
-            mass_flow=mass_flow,
-            rpm=rpm,
-            gas=gas_cold,
-            T_inlet=inlet_res.T_total_out,
-            P_inlet=inlet_res.P_total_out,
-        )
-        P3 = comp_result.P_outlet
-        T3 = comp_result.T_outlet
-        compressor_work = comp_result.power_kW * 1000.0 / mass_flow  # J/kg
-    else:
-        comp_result = meanline_compressor(
-            overall_pressure_ratio=overall_pressure_ratio,
+
+    # Multi-spool bookkeeping
+    lp_comp_result = None
+    hp_comp_result = None
+    hp_turb_result = None
+    lp_turb_result = None
+    spools_info: list[dict] = []
+
+    if n_spools == 2:
+        # ── Twin-spool pipeline ──────────────────────────
+        # Defaults for HP spool
+        _hp_pr = hp_pressure_ratio if hp_pressure_ratio is not None else math.sqrt(overall_pressure_ratio)
+        _lp_pr = overall_pressure_ratio / _hp_pr
+        _hp_rpm = hp_rpm if hp_rpm is not None else rpm * 1.3
+        _hp_r_hub = hp_r_hub if hp_r_hub is not None else r_hub * 0.8
+        _hp_r_tip = hp_r_tip if hp_r_tip is not None else r_tip * 0.8
+
+        # 4a. LP Compressor
+        lp_comp_result = meanline_compressor(
+            overall_pressure_ratio=_lp_pr,
             mass_flow=mass_flow,
             rpm=rpm,
             r_hub=r_hub,
@@ -494,14 +533,71 @@ def engine_cycle(
             T_inlet=inlet_res.T_total_out,
             P_inlet=inlet_res.P_total_out,
         )
-        last_station = comp_result.stations[-1]
-        P3 = last_station.P_total
-        T3 = last_station.T_total
-        compressor_work = comp_result.total_work  # J/kg
+        lp_last = lp_comp_result.stations[-1]
+        P_lp = lp_last.P_total
+        T_lp = lp_last.T_total
+        lp_comp_work = lp_comp_result.total_work  # J/kg
+        stations["lp_compressor_exit"] = StationConditions(P_total=P_lp, T_total=T_lp)
 
-    stations["compressor_exit"] = StationConditions(P_total=P3, T_total=T3)
+        # 4b. HP Compressor
+        hp_comp_result = meanline_compressor(
+            overall_pressure_ratio=_hp_pr,
+            mass_flow=mass_flow,
+            rpm=_hp_rpm,
+            r_hub=_hp_r_hub,
+            r_tip=_hp_r_tip,
+            n_stages=n_compressor_stages,
+            eta_poly=eta_poly_compressor,
+            reaction=compressor_reaction,
+            gas=gas_cold,
+            T_inlet=T_lp,
+            P_inlet=P_lp,
+        )
+        hp_last = hp_comp_result.stations[-1]
+        P3 = hp_last.P_total
+        T3 = hp_last.T_total
+        hp_comp_work = hp_comp_result.total_work  # J/kg
+        stations["compressor_exit"] = StationConditions(P_total=P3, T_total=T3)
 
-    # 5. Combustor
+        compressor_work = lp_comp_work + hp_comp_work
+        comp_result = hp_comp_result  # overall compressor result points to HP exit
+
+    else:
+        # ── Single-spool compressor ──────────────────────
+        if compressor_type == "centrifugal":
+            comp_result = centrifugal_compressor(
+                pressure_ratio=overall_pressure_ratio,
+                mass_flow=mass_flow,
+                rpm=rpm,
+                gas=gas_cold,
+                T_inlet=inlet_res.T_total_out,
+                P_inlet=inlet_res.P_total_out,
+            )
+            P3 = comp_result.P_outlet
+            T3 = comp_result.T_outlet
+            compressor_work = comp_result.power_kW * 1000.0 / mass_flow  # J/kg
+        else:
+            comp_result = meanline_compressor(
+                overall_pressure_ratio=overall_pressure_ratio,
+                mass_flow=mass_flow,
+                rpm=rpm,
+                r_hub=r_hub,
+                r_tip=r_tip,
+                n_stages=n_compressor_stages,
+                eta_poly=eta_poly_compressor,
+                reaction=compressor_reaction,
+                gas=gas_cold,
+                T_inlet=inlet_res.T_total_out,
+                P_inlet=inlet_res.P_total_out,
+            )
+            last_station = comp_result.stations[-1]
+            P3 = last_station.P_total
+            T3 = last_station.T_total
+            compressor_work = comp_result.total_work  # J/kg
+
+        stations["compressor_exit"] = StationConditions(P_total=P3, T_total=T3)
+
+    # 5. Combustor (same for single and twin-spool — uses HP compressor exit)
     comb_result = combustor_model(
         P_in=P3,
         T_in=T3,
@@ -519,45 +615,129 @@ def engine_cycle(
     mass_flow_total = mass_flow + fuel_flow
     stations["combustor_exit"] = StationConditions(P_total=P4, T_total=T4)
 
-    # 6. Turbine expansion ratio
-    # For turbojet: turbine only drives compressor, remaining energy goes to nozzle
-    # For turboshaft: turbine expands fully (to near-ambient), all work to shaft
-    turb_er = turbine_expansion_ratio_from_power_balance(
-        compressor_work=compressor_work,
-        T_turbine_inlet=T4,
-        eta_turbine=eta_poly_turbine,
-        eta_mech=eta_mech,
-        gamma_hot=gamma_hot,
-        cp_hot=cp_hot,
-    )
-
-    if engine_type == "turboshaft":
-        # Expand turbine to exhaust pressure (slightly above ambient for losses)
-        exhaust_loss_factor = 1.05  # 5% exhaust pressure loss
-        max_turb_er = P4 / (P_amb * exhaust_loss_factor)
-        turb_er = min(max_turb_er, P4 / P_amb)  # Don't expand below ambient
-
-    # 7. Turbine meanline design
     gas_hot = GasProperties(gamma=gamma_hot, cp=cp_hot,
                             R=cp_hot * (gamma_hot - 1.0) / gamma_hot)
-    turb_result = meanline_turbine(
-        overall_expansion_ratio=turb_er,
-        mass_flow=mass_flow_total,
-        rpm=rpm,
-        r_hub=r_hub,
-        r_tip=r_tip,
-        n_stages=n_turbine_stages,
-        eta_poly=eta_poly_turbine,
-        reaction=turbine_reaction,
-        gas=gas_hot,
-        T_inlet=T4,
-        P_inlet=P4,
-    )
-    last_turb_station = turb_result.stations[-1]
-    P5 = last_turb_station.P_total
-    T5 = last_turb_station.T_total
-    turbine_work = turb_result.total_work  # J/kg (positive)
-    stations["turbine_exit"] = StationConditions(P_total=P5, T_total=T5)
+
+    if n_spools == 2:
+        # ── Twin-spool turbines ──────────────────────────
+        # 6a. HP Turbine: sized to drive HP compressor
+        hp_turb_er = turbine_expansion_ratio_from_power_balance(
+            compressor_work=hp_comp_work,
+            T_turbine_inlet=T4,
+            eta_turbine=eta_poly_turbine,
+            eta_mech=eta_mech,
+            gamma_hot=gamma_hot,
+            cp_hot=cp_hot,
+        )
+        hp_turb_result = meanline_turbine(
+            overall_expansion_ratio=hp_turb_er,
+            mass_flow=mass_flow_total,
+            rpm=_hp_rpm,
+            r_hub=_hp_r_hub,
+            r_tip=_hp_r_tip,
+            n_stages=n_turbine_stages,
+            eta_poly=eta_poly_turbine,
+            reaction=turbine_reaction,
+            gas=gas_hot,
+            T_inlet=T4,
+            P_inlet=P4,
+        )
+        hp_turb_last = hp_turb_result.stations[-1]
+        P_hp_exit = hp_turb_last.P_total
+        T_hp_exit = hp_turb_last.T_total
+        hp_turb_work = hp_turb_result.total_work
+        stations["hp_turbine_exit"] = StationConditions(P_total=P_hp_exit, T_total=T_hp_exit)
+
+        # 6b. LP Turbine: sized to drive LP compressor (turbojet) or full expansion (turboshaft)
+        if engine_type == "turboshaft":
+            exhaust_loss_factor = 1.05
+            max_lp_turb_er = P_hp_exit / (P_amb * exhaust_loss_factor)
+            lp_turb_er = min(max_lp_turb_er, P_hp_exit / P_amb)
+        else:
+            lp_turb_er = turbine_expansion_ratio_from_power_balance(
+                compressor_work=lp_comp_work,
+                T_turbine_inlet=T_hp_exit,
+                eta_turbine=eta_poly_turbine,
+                eta_mech=eta_mech,
+                gamma_hot=gamma_hot,
+                cp_hot=cp_hot,
+            )
+
+        lp_turb_result = meanline_turbine(
+            overall_expansion_ratio=lp_turb_er,
+            mass_flow=mass_flow_total,
+            rpm=rpm,
+            r_hub=r_hub,
+            r_tip=r_tip,
+            n_stages=n_turbine_stages,
+            eta_poly=eta_poly_turbine,
+            reaction=turbine_reaction,
+            gas=gas_hot,
+            T_inlet=T_hp_exit,
+            P_inlet=P_hp_exit,
+        )
+        lp_turb_last = lp_turb_result.stations[-1]
+        P5 = lp_turb_last.P_total
+        T5 = lp_turb_last.T_total
+        lp_turb_work = lp_turb_result.total_work
+        stations["turbine_exit"] = StationConditions(P_total=P5, T_total=T5)
+
+        turbine_work = hp_turb_work + lp_turb_work
+        turb_result = lp_turb_result  # overall turbine result points to LP exit
+
+        spools_info = [
+            {
+                "name": "LP Spool",
+                "rpm": rpm,
+                "pr": _lp_pr,
+                "compressor_work": lp_comp_work,
+                "turbine_work": lp_turb_work,
+            },
+            {
+                "name": "HP Spool",
+                "rpm": _hp_rpm,
+                "pr": _hp_pr,
+                "compressor_work": hp_comp_work,
+                "turbine_work": hp_turb_work,
+            },
+        ]
+
+    else:
+        # ── Single-spool turbine ─────────────────────────
+        # 6. Turbine expansion ratio
+        turb_er = turbine_expansion_ratio_from_power_balance(
+            compressor_work=compressor_work,
+            T_turbine_inlet=T4,
+            eta_turbine=eta_poly_turbine,
+            eta_mech=eta_mech,
+            gamma_hot=gamma_hot,
+            cp_hot=cp_hot,
+        )
+
+        if engine_type == "turboshaft":
+            exhaust_loss_factor = 1.05
+            max_turb_er = P4 / (P_amb * exhaust_loss_factor)
+            turb_er = min(max_turb_er, P4 / P_amb)
+
+        # 7. Turbine meanline design
+        turb_result = meanline_turbine(
+            overall_expansion_ratio=turb_er,
+            mass_flow=mass_flow_total,
+            rpm=rpm,
+            r_hub=r_hub,
+            r_tip=r_tip,
+            n_stages=n_turbine_stages,
+            eta_poly=eta_poly_turbine,
+            reaction=turbine_reaction,
+            gas=gas_hot,
+            T_inlet=T4,
+            P_inlet=P4,
+        )
+        last_turb_station = turb_result.stations[-1]
+        P5 = last_turb_station.P_total
+        T5 = last_turb_station.T_total
+        turbine_work = turb_result.total_work
+        stations["turbine_exit"] = StationConditions(P_total=P5, T_total=T5)
 
     # 8. Nozzle or shaft power
     nozzle_res = None
@@ -616,6 +796,10 @@ def engine_cycle(
         combustor=comb_result,
         turbine=turb_result,
         nozzle=nozzle_res,
+        lp_compressor=lp_comp_result,
+        hp_compressor=hp_comp_result,
+        hp_turbine=hp_turb_result,
+        lp_turbine=lp_turb_result,
         stations=stations,
         net_thrust=net_thrust,
         specific_fuel_consumption=sfc,
@@ -628,4 +812,6 @@ def engine_cycle(
         compressor_work=compressor_work,
         turbine_work=turbine_work,
         mechanical_efficiency=eta_mech,
+        n_spools=n_spools,
+        spools=spools_info,
     )

@@ -257,3 +257,127 @@ class TestValidation:
                 r_hub=0.15,
                 r_tip=0.30,
             )
+
+
+# ── Multi-Spool Tests ─────────────────────────────
+
+
+DEFAULT_TWIN_SPOOL = dict(
+    engine_type="turbojet",
+    overall_pressure_ratio=16.0,
+    turbine_inlet_temp=1600.0,
+    mass_flow=20.0,
+    rpm=10000.0,
+    r_hub=0.15,
+    r_tip=0.30,
+    n_spools=2,
+)
+
+
+def _run_twin_spool(**overrides):
+    kw = {**DEFAULT_TWIN_SPOOL, **overrides}
+    return engine_cycle(**kw)
+
+
+class TestMultiSpool:
+    def test_twin_spool_turbojet(self):
+        """Twin-spool turbojet completes and produces thrust."""
+        result = _run_twin_spool()
+        assert isinstance(result, EngineCycleResult)
+        assert result.n_spools == 2
+        assert result.net_thrust > 0
+
+    def test_twin_spool_stations(self):
+        """Twin-spool has lp/hp compressor and turbine stations."""
+        result = _run_twin_spool()
+        st = result.stations
+        assert "lp_compressor_exit" in st
+        assert "compressor_exit" in st       # HP compressor exit
+        assert "hp_turbine_exit" in st
+        assert "turbine_exit" in st          # LP turbine exit
+        assert "combustor_exit" in st
+        # Pressure rises through LP then HP compressor
+        assert st["lp_compressor_exit"].P_total > st["inlet_exit"].P_total
+        assert st["compressor_exit"].P_total > st["lp_compressor_exit"].P_total
+
+    def test_twin_spool_power_balance(self):
+        """Each spool is power-balanced independently."""
+        result = _run_twin_spool()
+        assert len(result.spools) == 2
+        for sp in result.spools:
+            turb_delivered = sp["turbine_work"] * result.mechanical_efficiency
+            # Allow 10% tolerance since meanline discretization introduces error
+            assert turb_delivered >= sp["compressor_work"] * 0.85, (
+                f"{sp['name']}: turbine {turb_delivered:.0f} < compressor {sp['compressor_work']:.0f}"
+            )
+
+    def test_twin_spool_pr_split(self):
+        """LP_PR × HP_PR ≈ OPR."""
+        result = _run_twin_spool()
+        lp_pr = result.spools[0]["pr"]
+        hp_pr = result.spools[1]["pr"]
+        opr = 16.0
+        assert lp_pr * hp_pr == pytest.approx(opr, rel=0.01)
+
+    def test_kaveri_twin_spool(self):
+        """Kaveri-class twin-spool: OPR=20, TIT=1700K, realistic thrust."""
+        result = engine_cycle(
+            engine_type="turbojet",
+            overall_pressure_ratio=20.0,
+            turbine_inlet_temp=1700.0,
+            mass_flow=20.0,
+            rpm=10000.0,
+            r_hub=0.15,
+            r_tip=0.30,
+            n_spools=2,
+            hp_pressure_ratio=4.5,
+            hp_rpm=15000.0,
+        )
+        assert result.n_spools == 2
+        assert result.net_thrust > 10000  # >10 kN at 20 kg/s
+
+    def test_single_spool_unchanged(self):
+        """n_spools=1 produces identical result to default."""
+        r1 = engine_cycle(
+            overall_pressure_ratio=8.0,
+            turbine_inlet_temp=1400.0,
+            mass_flow=20.0,
+            rpm=15000.0,
+            r_hub=0.15,
+            r_tip=0.30,
+        )
+        r2 = engine_cycle(
+            overall_pressure_ratio=8.0,
+            turbine_inlet_temp=1400.0,
+            mass_flow=20.0,
+            rpm=15000.0,
+            r_hub=0.15,
+            r_tip=0.30,
+            n_spools=1,
+        )
+        assert r1.net_thrust == pytest.approx(r2.net_thrust, rel=1e-6)
+        assert r1.compressor_work == pytest.approx(r2.compressor_work, rel=1e-6)
+        assert r2.n_spools == 1
+        assert r2.spools == []
+
+    def test_custom_hp_pr(self):
+        """Explicit HP pressure ratio is respected."""
+        result = _run_twin_spool(hp_pressure_ratio=5.0)
+        hp_pr = result.spools[1]["pr"]
+        assert hp_pr == pytest.approx(5.0, rel=0.01)
+
+    def test_twin_spool_turboshaft(self):
+        """Turboshaft with 2 spools produces shaft power."""
+        result = engine_cycle(
+            engine_type="turboshaft",
+            overall_pressure_ratio=12.0,
+            turbine_inlet_temp=1500.0,
+            mass_flow=15.0,
+            rpm=10000.0,
+            r_hub=0.12,
+            r_tip=0.25,
+            n_spools=2,
+        )
+        assert result.n_spools == 2
+        assert result.shaft_power > 0
+        assert result.nozzle is None

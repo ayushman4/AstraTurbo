@@ -337,6 +337,87 @@ def _turbine_section(result) -> str:
     return "\n".join(lines)
 
 
+def _turbine_off_design_section(od_result) -> str:
+    """Generate turbine off-design analysis section."""
+    lines = ["<h2>Turbine Off-Design Analysis</h2>"]
+
+    status_class = "danger" if od_result.is_choked else "good"
+    lines.append(f"<div class='summary-box {status_class}'>")
+    lines.append(f"<strong>Overall ER:</strong> {od_result.overall_er:.4f} &nbsp;&nbsp;")
+    lines.append(f"<strong>Efficiency:</strong> {od_result.overall_efficiency:.4f} &nbsp;&nbsp;")
+    lines.append(f"<strong>Choked:</strong> {od_result.is_choked} &nbsp;&nbsp;")
+    lines.append(f"<strong>Choke Margin:</strong> {od_result.choke_margin:.4f}")
+    lines.append("</div>")
+
+    lines.append("<table>")
+    lines.append(
+        "<tr><th>Stage</th><th>ER</th><th>&eta;</th>"
+        "<th>Incidence (&deg;)</th><th>Nozzle M</th>"
+        "<th>Loss</th><th>Status</th></tr>"
+    )
+    for s in od_result.stages:
+        choke_class = "danger" if s["is_choked"] else ""
+        lines.append(
+            f"<tr class='{choke_class}'><td>{s['stage']}</td>"
+            f"<td>{s['ER']:.4f}</td>"
+            f"<td>{s['efficiency']:.4f}</td>"
+            f"<td>{s['incidence_deg']:.2f}</td>"
+            f"<td>{s['nozzle_mach']:.3f}</td>"
+            f"<td>{s['loss_total']:.5f}</td>"
+            f"<td>{'CHOKE' if s['is_choked'] else 'OK'}</td></tr>"
+        )
+    lines.append("</table>")
+    return "\n".join(lines)
+
+
+def _turbine_map_section(tmap) -> str:
+    """Generate turbine map section."""
+    lines = ["<h2>Turbine Map</h2>"]
+
+    if tmap.design_point:
+        dp = tmap.design_point
+        lines.append("<div class='summary-box'>")
+        lines.append(f"<strong>Design Point:</strong> "
+                     f"m&#775;={dp.get('mass_flow', 0):.2f} kg/s, "
+                     f"ER={dp.get('er', 0):.4f}, "
+                     f"&eta;={dp.get('efficiency', 0):.4f}, "
+                     f"RPM={dp.get('rpm', 0):.0f}")
+        lines.append("</div>")
+
+    for sl in tmap.speed_lines:
+        lines.append(f"<h3>N/N<sub>des</sub> = {sl.rpm_fraction:.2f}</h3>")
+        lines.append("<table>")
+        lines.append(
+            "<tr><th>m&#775; (kg/s)</th><th>ER</th><th>&eta;</th>"
+            "<th>Choked</th></tr>"
+        )
+        for j in range(len(sl.mass_flows)):
+            row_class = "danger" if sl.is_choked[j] else ""
+            lines.append(
+                f"<tr class='{row_class}'>"
+                f"<td>{sl.mass_flows[j]:.3f}</td>"
+                f"<td>{sl.expansion_ratios[j]:.4f}</td>"
+                f"<td>{sl.efficiencies[j]:.4f}</td>"
+                f"<td>{'YES' if sl.is_choked[j] else '-'}</td></tr>"
+            )
+        lines.append("</table>")
+        if sl.choke_point_index is not None:
+            idx = sl.choke_point_index
+            lines.append(
+                f"<p><em>Choke point: m&#775;={sl.mass_flows[idx]:.3f} kg/s, "
+                f"ER={sl.expansion_ratios[idx]:.4f}</em></p>"
+            )
+
+    if tmap.choke_line:
+        lines.append("<h3>Choke Line</h3><table>")
+        lines.append("<tr><th>m&#775; (kg/s)</th><th>ER</th></tr>")
+        for mf, er in tmap.choke_line:
+            lines.append(f"<tr><td>{mf:.3f}</td><td>{er:.4f}</td></tr>")
+        lines.append("</table>")
+
+    return "\n".join(lines)
+
+
 def _centrifugal_section(result) -> str:
     """Generate centrifugal compressor section."""
     lines = ["<h2>Centrifugal Compressor Design</h2>"]
@@ -432,6 +513,24 @@ def _engine_cycle_section(result) -> str:
                  f"(mismatch: {balance_pct:.1f}%)")
     lines.append("</div>")
 
+    # Per-spool breakdown (twin-spool only)
+    n_spools = getattr(result, "n_spools", 1)
+    spools = getattr(result, "spools", [])
+    if n_spools > 1 and spools:
+        lines.append("<h3>Spool Breakdown</h3>")
+        lines.append("<table>")
+        lines.append("<tr><th>Spool</th><th>RPM</th><th>Pressure Ratio</th>"
+                     "<th>Compressor Work (J/kg)</th><th>Turbine Work (J/kg)</th></tr>")
+        for sp in spools:
+            lines.append(
+                f"<tr><td style='text-align:left'>{sp['name']}</td>"
+                f"<td>{sp['rpm']:.0f}</td>"
+                f"<td>{sp['pr']:.2f}</td>"
+                f"<td>{sp['compressor_work']:.0f}</td>"
+                f"<td>{sp['turbine_work']:.0f}</td></tr>"
+            )
+        lines.append("</table>")
+
     return "\n".join(lines)
 
 
@@ -442,6 +541,8 @@ def generate_report(
     compressor_map=None,
     centrifugal_result=None,
     turbine_result=None,
+    turbine_off_design_result=None,
+    turbine_map=None,
     material=None,
     material_temperature: float | None = None,
     blade_params: list[dict] | None = None,
@@ -481,6 +582,12 @@ def generate_report(
 
     if turbine_result is not None:
         parts.append(_turbine_section(turbine_result))
+
+    if turbine_off_design_result is not None:
+        parts.append(_turbine_off_design_section(turbine_off_design_result))
+
+    if turbine_map is not None:
+        parts.append(_turbine_map_section(turbine_map))
 
     if engine_cycle_result is not None:
         parts.append(_engine_cycle_section(engine_cycle_result))

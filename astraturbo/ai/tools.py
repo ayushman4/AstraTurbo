@@ -1054,8 +1054,129 @@ _register(
                 "enum": ["axial", "centrifugal"],
                 "description": "Compressor type (default axial)",
             },
+            "n_spools": {
+                "type": "integer",
+                "enum": [1, 2],
+                "description": "Number of spools: 1 (single-spool, default) or 2 (twin-spool)",
+            },
+            "hp_pressure_ratio": {
+                "type": "number",
+                "description": "HP spool pressure ratio (twin-spool only; default sqrt(OPR))",
+            },
+            "hp_rpm": {
+                "type": "number",
+                "description": "HP spool RPM (twin-spool only; default rpm*1.3)",
+            },
         },
         "required": ["overall_pressure_ratio", "turbine_inlet_temp", "mass_flow", "rpm", "r_hub", "r_tip"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
+# 24. Turbine off-design analysis
+# ──────────────────────────────────────────────────────
+
+_register(
+    "turbine_off_design",
+    "Run off-design analysis of an axial turbine at a different mass flow "
+    "and/or RPM than the design point. Blade metal angles are fixed from the "
+    "design; flow angles change, creating incidence which modifies losses, "
+    "efficiency, and expansion ratio. Returns per-stage incidence, nozzle Mach, "
+    "losses, and choke flags. Requires design-point geometry parameters plus "
+    "the off-design mass_flow and rpm.",
+    {
+        "type": "object",
+        "properties": {
+            "overall_expansion_ratio": {
+                "type": "number",
+                "description": "Design-point overall expansion ratio (for design geometry)",
+            },
+            "design_mass_flow": {
+                "type": "number",
+                "description": "Design-point mass flow rate (kg/s)",
+            },
+            "design_rpm": {
+                "type": "number",
+                "description": "Design-point RPM",
+            },
+            "r_hub": {
+                "type": "number",
+                "description": "Hub radius (m)",
+            },
+            "r_tip": {
+                "type": "number",
+                "description": "Tip radius (m)",
+            },
+            "off_design_mass_flow": {
+                "type": "number",
+                "description": "Off-design mass flow rate (kg/s)",
+            },
+            "off_design_rpm": {
+                "type": "number",
+                "description": "Off-design RPM",
+            },
+            "inlet_temp": {
+                "type": "number",
+                "description": "Inlet total temperature in K (default 1500)",
+            },
+        },
+        "required": [
+            "overall_expansion_ratio", "design_mass_flow", "design_rpm",
+            "r_hub", "r_tip", "off_design_mass_flow", "off_design_rpm",
+        ],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
+# 25. Turbine map generation
+# ──────────────────────────────────────────────────────
+
+_register(
+    "generate_turbine_map",
+    "Generate a complete turbine performance map with speed lines and choke "
+    "line. Sweeps mass flow at multiple RPM fractions to produce expansion ratio "
+    "vs mass flow curves, identifies choke boundaries, and computes choke "
+    "margin. Returns a formatted table of all speed lines plus the choke line.",
+    {
+        "type": "object",
+        "properties": {
+            "overall_expansion_ratio": {
+                "type": "number",
+                "description": "Design-point overall expansion ratio",
+            },
+            "mass_flow": {
+                "type": "number",
+                "description": "Design-point mass flow rate (kg/s)",
+            },
+            "rpm": {
+                "type": "number",
+                "description": "Design-point RPM",
+            },
+            "r_hub": {
+                "type": "number",
+                "description": "Hub radius (m)",
+            },
+            "r_tip": {
+                "type": "number",
+                "description": "Tip radius (m)",
+            },
+            "rpm_fractions": {
+                "type": "array",
+                "items": {"type": "number"},
+                "description": "RPM fractions to evaluate (default: [0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0, 1.05])",
+            },
+            "n_points": {
+                "type": "integer",
+                "description": "Number of mass flow points per speed line (default: 15)",
+            },
+            "inlet_temp": {
+                "type": "number",
+                "description": "Inlet total temperature in K (default 1500)",
+            },
+        },
+        "required": ["overall_expansion_ratio", "mass_flow", "rpm", "r_hub", "r_tip"],
     },
 )
 
@@ -1113,6 +1234,10 @@ def execute_tool(name: str, inputs: dict) -> str:
             return _exec_turbine_meanline(inputs)
         elif name == "engine_cycle":
             return _exec_engine_cycle(inputs)
+        elif name == "turbine_off_design":
+            return _exec_turbine_off_design(inputs)
+        elif name == "generate_turbine_map":
+            return _exec_turbine_map(inputs)
         else:
             return f"Unknown tool: {name}"
     except Exception as e:
@@ -2007,6 +2132,115 @@ def _exec_engine_cycle(inputs: dict) -> str:
         kwargs["mach_flight"] = float(inputs["mach_flight"])
     if "compressor_type" in inputs:
         kwargs["compressor_type"] = str(inputs["compressor_type"])
+    if "n_spools" in inputs:
+        kwargs["n_spools"] = int(inputs["n_spools"])
+    if "hp_pressure_ratio" in inputs:
+        kwargs["hp_pressure_ratio"] = float(inputs["hp_pressure_ratio"])
+    if "hp_rpm" in inputs:
+        kwargs["hp_rpm"] = float(inputs["hp_rpm"])
 
     result = engine_cycle(**kwargs)
     return result.summary()
+
+
+def _exec_turbine_off_design(inputs: dict) -> str:
+    from astraturbo.design.turbine import meanline_turbine
+    from astraturbo.design.turbine_off_design import turbine_off_design
+
+    # Validate inputs
+    er = float(inputs["overall_expansion_ratio"])
+    if not (1.01 <= er <= 50.0):
+        return f"Error: expansion ratio {er} out of range [1.01, 50.0]"
+
+    design_mf = float(inputs["design_mass_flow"])
+    design_rpm = float(inputs["design_rpm"])
+    r_hub = float(inputs["r_hub"])
+    r_tip = float(inputs["r_tip"])
+    od_mf = float(inputs["off_design_mass_flow"])
+    od_rpm = float(inputs["off_design_rpm"])
+
+    if r_hub <= 0 or r_tip <= 0 or r_tip <= r_hub:
+        return "Error: radii invalid (need 0 < r_hub < r_tip)"
+    if not (0.01 <= od_mf <= 10000.0):
+        return f"Error: off-design mass flow {od_mf} out of range"
+    if not (100 <= od_rpm <= 200000):
+        return f"Error: off-design RPM {od_rpm} out of range"
+
+    kwargs = {
+        "overall_expansion_ratio": er,
+        "mass_flow": design_mf,
+        "rpm": design_rpm,
+        "r_hub": r_hub,
+        "r_tip": r_tip,
+    }
+    if "inlet_temp" in inputs:
+        kwargs["T_inlet"] = float(inputs["inlet_temp"])
+
+    # Run design point first
+    design_result = meanline_turbine(**kwargs)
+
+    # Run off-design
+    od_result = turbine_off_design(design_result, mass_flow=od_mf, rpm=od_rpm)
+
+    output = od_result.summary()
+    output += f"\n\nDesign point: ER={design_result.overall_expansion_ratio:.3f}, "
+    output += f"mass_flow={design_mf:.2f} kg/s, RPM={design_rpm:.0f}"
+    output += f"\nOff-design:   mass_flow={od_mf:.2f} kg/s, RPM={od_rpm:.0f}"
+
+    return output
+
+
+def _exec_turbine_map(inputs: dict) -> str:
+    from astraturbo.design.turbine import meanline_turbine
+    from astraturbo.design.turbine_off_design import generate_turbine_map
+
+    # Validate inputs
+    er = float(inputs["overall_expansion_ratio"])
+    if not (1.01 <= er <= 50.0):
+        return f"Error: expansion ratio {er} out of range [1.01, 50.0]"
+
+    mass_flow = float(inputs["mass_flow"])
+    rpm = float(inputs["rpm"])
+    r_hub = float(inputs["r_hub"])
+    r_tip = float(inputs["r_tip"])
+
+    if r_hub <= 0 or r_tip <= 0 or r_tip <= r_hub:
+        return "Error: radii invalid (need 0 < r_hub < r_tip)"
+
+    kwargs = {
+        "overall_expansion_ratio": er,
+        "mass_flow": mass_flow,
+        "rpm": rpm,
+        "r_hub": r_hub,
+        "r_tip": r_tip,
+    }
+    if "inlet_temp" in inputs:
+        kwargs["T_inlet"] = float(inputs["inlet_temp"])
+
+    # Run design point
+    design_result = meanline_turbine(**kwargs)
+
+    # Map parameters
+    rpm_fractions = inputs.get("rpm_fractions", None)
+    n_points = int(inputs.get("n_points", 15))
+    if n_points < 3 or n_points > 50:
+        return f"Error: n_points {n_points} out of range [3, 50]"
+
+    map_kwargs = {"n_points": n_points}
+    if rpm_fractions is not None:
+        map_kwargs["rpm_fractions"] = [float(f) for f in rpm_fractions]
+
+    tmap = generate_turbine_map(design_result, **map_kwargs)
+
+    output = tmap.summary()
+
+    # Add choke margin at design speed
+    for sl in tmap.speed_lines:
+        if abs(sl.rpm_fraction - 1.0) < 0.01 and sl.choke_point_index is not None:
+            choke_er = sl.expansion_ratios[sl.choke_point_index]
+            design_er = tmap.design_point.get("er", 1.0)
+            if design_er > 1.0:
+                cm = (choke_er - design_er) / design_er
+                output += f"\n\nChoke margin at design speed: {cm:.4f} ({cm*100:.1f}%)"
+
+    return output
