@@ -126,6 +126,12 @@ def main():
     ml_parser.add_argument("--eta", type=float, default=0.90, help="Polytropic efficiency (default: 0.90)")
     ml_parser.add_argument("--radial-stations", type=int, default=3,
                            help="Number of radial stations for blade angles (default: 3 = hub/mid/tip)")
+    ml_parser.add_argument("--off-design", action="store_true",
+                           help="Run single off-design point at given conditions")
+    ml_parser.add_argument("--map", action="store_true",
+                           help="Generate full compressor map and print speed line table")
+    ml_parser.add_argument("--rpm-fractions", type=str, default="0.5,0.6,0.7,0.8,0.9,0.95,1.0,1.05",
+                           help="Comma-separated RPM fractions for map (default: 0.5,0.6,...,1.05)")
 
     # --- fea ---
     fea_parser = subparsers.add_parser("fea", help="Set up FEA structural analysis")
@@ -704,6 +710,40 @@ def _cmd_meanline(args):
                   f"{math.degrees(a['beta_out']):15.2f}  "
                   f"{math.degrees(a['alpha_in']):15.2f}  "
                   f"{math.degrees(a['alpha_out']):16.2f}")
+
+    # Off-design analysis
+    if getattr(args, 'off_design', False):
+        from astraturbo.design.off_design import off_design_compressor
+        print()
+        print("=" * 60)
+        print("Off-Design Analysis (same conditions as design point):")
+        print("=" * 60)
+        od_result = off_design_compressor(
+            result, mass_flow=args.mass_flow, rpm=args.rpm,
+        )
+        print(od_result.summary())
+
+    # Compressor map generation
+    if getattr(args, 'map', False):
+        from astraturbo.design.compressor_map import generate_compressor_map
+        print()
+        print("=" * 60)
+        print("Generating Compressor Map...")
+        print("=" * 60)
+        rpm_fracs = [float(x) for x in args.rpm_fractions.split(",")]
+        cmap = generate_compressor_map(
+            result, rpm_fractions=rpm_fracs,
+        )
+        print(cmap.summary())
+
+        # Surge margin at design speed
+        for sl in cmap.speed_lines:
+            if abs(sl.rpm_fraction - 1.0) < 0.01 and sl.surge_point_index is not None:
+                surge_pr = sl.pressure_ratios[sl.surge_point_index]
+                design_pr = cmap.design_point.get("pr", 1.0)
+                if design_pr > 1.0:
+                    sm = (surge_pr - design_pr) / design_pr
+                    print(f"\nSurge margin at design speed: {sm:.4f} ({sm*100:.1f}%)")
 
 
 def _cmd_fea(args):

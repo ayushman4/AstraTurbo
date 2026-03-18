@@ -18,7 +18,7 @@ one stage of the turbomachinery engineering pipeline.
 │Meanln│ OpenFOAM │ CalculiX │  CGNS    │   TFI    │ BladeRow │
 │Vel.  │ Fluent   │ Abaqus   │ blockMsh │   SCM    │ Stacking │
 │Tri.  │ CFX      │ Material │ Tecplot  │  O-Grid  │  NURBS   │
-│      │ SU2      │ CFD→FEA  │ VTK/30+  │ MultBlk  │Hub/Shrd │
+│OffDes│ SU2      │ CFD→FEA  │ VTK/30+  │ MultBlk  │Hub/Shrd │
 ├──────┴──────────┴──────────┴──────────┴──────────┴──────────┤
 │                     NURBS Engine (geomdl)                    │
 ├─────────────────────────────────────────────────────────────┤
@@ -54,9 +54,10 @@ materials, formats, file inspect). Requires `ANTHROPIC_API_KEY`.
 Accessible via: GUI (AI Assistant tab), CLI (`astraturbo ai`), Python (`create_assistant()`).
 
 ### design/
-Velocity triangle calculations and meanline stage-by-stage analysis.
+Velocity triangle calculations, meanline stage-by-stage analysis, off-design solver,
+and compressor map generation.
 Input: pressure ratio, mass flow, RPM, radii.
-Output: blade angles, loading coefficients, De Haller ratios.
+Output: blade angles, loading coefficients, De Haller ratios, speed lines, surge margin.
 Connects to blade/ by auto-generating stagger, camber, and solidity parameters.
 
 ### cfd/

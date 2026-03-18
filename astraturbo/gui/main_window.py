@@ -846,7 +846,7 @@ class MainWindow(QMainWindow):
 
     def _run_meanline(self) -> None:
         """Run meanline compressor design from a dialog."""
-        from PySide6.QtWidgets import QInputDialog
+        from PySide6.QtWidgets import QInputDialog, QCheckBox, QDialog, QVBoxLayout, QDialogButtonBox
 
         # Get inputs via simple dialogs
         pr, ok = QInputDialog.getDouble(
@@ -884,6 +884,20 @@ class MainWindow(QMainWindow):
         )
         if not ok:
             return
+
+        # Ask whether to generate compressor map
+        generate_map = False
+        map_dlg = QDialog(self)
+        map_dlg.setWindowTitle("Compressor Map")
+        layout = QVBoxLayout(map_dlg)
+        map_cb = QCheckBox("Generate Compressor Map")
+        layout.addWidget(map_cb)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(map_dlg.accept)
+        buttons.rejected.connect(map_dlg.reject)
+        layout.addWidget(buttons)
+        if map_dlg.exec() == QDialog.Accepted:
+            generate_map = map_cb.isChecked()
 
         try:
             from ..design import meanline_compressor, meanline_to_blade_parameters
@@ -937,6 +951,12 @@ class MainWindow(QMainWindow):
                         f"{math.degrees(a['alpha_in']):9.1f}  "
                         f"{math.degrees(a['alpha_out']):10.1f}\n"
                     )
+
+            # Compressor map generation
+            if generate_map:
+                from ..design.compressor_map import generate_compressor_map
+                cmap = generate_compressor_map(result)
+                summary += "\n\n" + cmap.summary()
 
             QMessageBox.information(self, "Meanline Design Result", summary)
             self.statusBar().showMessage(

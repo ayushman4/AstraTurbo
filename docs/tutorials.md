@@ -446,6 +446,67 @@ These parameters feed directly into the profile and blade modules.
 
 ---
 
+## Tutorial 6b: Off-Design Analysis & Compressor Maps
+
+After designing a compressor, evaluate how it performs at different operating
+conditions (varying RPM and mass flow). The blade metal angles are fixed from
+the design point; flow angles change, creating incidence which modifies losses
+and pressure ratio.
+
+### Single off-design point
+
+```python
+from astraturbo.design import meanline_compressor, off_design_compressor
+
+design = meanline_compressor(
+    overall_pressure_ratio=1.5, mass_flow=20.0,
+    rpm=15000, r_hub=0.15, r_tip=0.25,
+)
+
+# Run at 80% mass flow, same RPM
+od = off_design_compressor(design, mass_flow=16.0, rpm=15000)
+print(od.summary())
+# Shows: PR, efficiency, DF, incidence per stage
+# Flags: stall (DF > 0.6) and choke (throat Mach >= 1.0)
+```
+
+### Generate a compressor map
+
+Sweep mass flow at multiple RPM fractions to produce speed lines:
+
+```python
+from astraturbo.design import generate_compressor_map
+
+cmap = generate_compressor_map(
+    design,
+    rpm_fractions=[0.5, 0.7, 0.85, 1.0, 1.05],
+    n_points=15,
+)
+print(cmap.summary())
+```
+
+Output includes:
+- **Speed lines**: mass flow, PR, efficiency, stall/choke flags at each point
+- **Surge line**: (mass flow, PR) at the stall onset for each speed
+- **Surge margin**: at design speed
+
+### CLI
+
+```bash
+python -m astraturbo meanline --pr 1.5 --mass-flow 20 --rpm 15000 \
+  --r-hub 0.15 --r-tip 0.25 --off-design
+
+python -m astraturbo meanline --pr 1.5 --mass-flow 20 --rpm 15000 \
+  --r-hub 0.15 --r-tip 0.25 --map --rpm-fractions "0.7,0.85,1.0,1.05"
+```
+
+### GUI
+
+In **Compute > Meanline Design**, check the **Generate Compressor Map** box.
+The map summary is appended to the result dialog.
+
+---
+
 ## Tutorial 7: Set Up a CFD Case
 
 ### OpenFOAM

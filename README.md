@@ -42,7 +42,7 @@ python -m astraturbo --version
 # astraturbo 0.1.0
 
 python -m pytest tests/ -q
-# 365+ passed
+# 400+ passed
 ```
 
 ---
@@ -180,7 +180,18 @@ python -m astraturbo ai "Design a 5-stage compressor with PR=8, mass flow 25 kg/
 ### Meanline design
 
 ```bash
+# Design-point analysis
 python -m astraturbo meanline --pr 4.0 --mass-flow 20 --rpm 12000 --r-hub 0.15 --r-tip 0.30
+
+# Off-design analysis at given conditions
+python -m astraturbo meanline --pr 1.5 --mass-flow 20 --rpm 15000 --r-hub 0.15 --r-tip 0.25 --off-design
+
+# Generate full compressor map (speed lines + surge line)
+python -m astraturbo meanline --pr 2.1 --mass-flow 20 --rpm 17189 --r-hub 0.178 --r-tip 0.252 --map
+
+# Custom RPM fractions for map
+python -m astraturbo meanline --pr 2.1 --mass-flow 20 --rpm 17189 --r-hub 0.178 --r-tip 0.252 \
+  --map --rpm-fractions "0.7,0.85,1.0,1.05"
 ```
 
 ### y+ calculator
@@ -275,6 +286,30 @@ print(result.summary())
 # Convert to blade geometry parameters
 blade_params = meanline_to_blade_parameters(result)
 # [{stage: 1, rotor_stagger_deg: -45.2, rotor_camber_deg: 13.7, ...}, ...]
+```
+
+### Off-design analysis & compressor maps
+
+```python
+from astraturbo.design import (
+    meanline_compressor, off_design_compressor, generate_compressor_map,
+)
+
+# Design the compressor
+design = meanline_compressor(
+    overall_pressure_ratio=2.1, mass_flow=20.0,
+    rpm=17189, r_hub=0.178, r_tip=0.252,
+)
+
+# Off-design at reduced mass flow
+od = off_design_compressor(design, mass_flow=16.0, rpm=17189)
+print(f"PR={od.overall_pr:.3f}, eta={od.overall_efficiency:.4f}, stalled={od.is_stalled}")
+
+# Generate full compressor map
+cmap = generate_compressor_map(design, rpm_fractions=[0.7, 0.85, 1.0, 1.05])
+print(cmap.summary())
+# Speed lines with mass flow, PR, efficiency, stall/choke flags
+# Surge line connecting stall points across speed lines
 ```
 
 ### Generate a profile
@@ -463,7 +498,7 @@ export ANTHROPIC_API_KEY=sk-ant-api03-...
 ```
 astraturbo/
 ├── ai/              Claude-powered AI assistant (9 tools, NL interface)
-├── design/          Velocity triangles, meanline analysis
+├── design/          Velocity triangles, meanline analysis, off-design, compressor maps
 ├── foundation/      Property system, signals, undo/redo, serialization
 ├── baseclass/       ATObject, Node tree, Drawable mixin
 ├── camberline/      8 camber line types
@@ -510,8 +545,8 @@ astraturbo/
 │            │    │ Stacking │    │  O-Grid  │    │ OpenFOAM │    │ CalculiX │    │  pymoo   │
 │ Vel. tri.  │    │  NURBS   │    │   TFI    │    │ Fluent   │    │ Abaqus   │    │  NSGA-II │
 │ Euler eqn  │    │Hub/Shroud│    │Multi-blk │    │ CFX      │    │Materials │    │  DOE     │
-│ Blade      │    │          │    │  CGNS    │    │ SU2      │    │Stress/   │    │          │
-│ angles     │    │          │    │          │    │          │    │ modal    │    │          │
+│ Off-design │    │          │    │  CGNS    │    │ SU2      │    │Stress/   │    │          │
+│ Comp. maps │    │          │    │          │    │          │    │ modal    │    │          │
 └────────────┘    └──────────┘    └──────────┘    └──────────┘    └──────────┘    └──────────┘
       │                                                                                │
       └────────────────────────── Optimization Loop ───────────────────────────────────┘
@@ -660,14 +695,14 @@ All cross-platform (Windows, Linux, macOS).
 ```bash
 pip install -e ".[dev]"
 pytest tests/ -v
-# 365+ tests pass (unit, integration, validation, GUI, CLI)
+# 400+ tests pass (unit, integration, validation, GUI, CLI)
 ```
 
 ### Test coverage
 
 - **Unit tests**: Foundation, camberline, thickness, profile, blade, NURBS, mesh, export, design, FEA, CFD
 - **Integration tests**: CLI commands (38 tests), GUI components (29 tests), AI tools (9 tests)
-- **Validation tests**: Velocity triangles, meanline thermodynamics, NACA 65 profiles, mesh quality bounds
+- **Validation tests**: Velocity triangles, meanline thermodynamics, NACA 65 profiles, mesh quality bounds, off-design compressor maps, NASA Rotor 37
 - **Security tests**: XXE prevention, deserialization whitelisting, command injection prevention
 
 ### Security

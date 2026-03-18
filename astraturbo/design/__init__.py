@@ -30,6 +30,15 @@ from .meanline import (
     meanline_compressor,
     meanline_to_blade_parameters,
 )
+from .off_design import (
+    OffDesignResult,
+    off_design_compressor,
+)
+from .compressor_map import (
+    SpeedLine,
+    CompressorMap,
+    generate_compressor_map,
+)
 
 __all__ = [
     "VelocityTriangle",
@@ -43,4 +52,9 @@ __all__ = [
     "meanline_compressor_stage",
     "meanline_compressor",
     "meanline_to_blade_parameters",
+    "OffDesignResult",
+    "off_design_compressor",
+    "SpeedLine",
+    "CompressorMap",
+    "generate_compressor_map",
 ]

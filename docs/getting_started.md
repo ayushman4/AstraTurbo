@@ -523,6 +523,71 @@ Run the full validation suite: `python -m pytest tests/test_validation/test_nasa
 
 ---
 
+## Tutorial 11: Off-Design Analysis & Compressor Maps
+
+Once you have a design-point solution, evaluate how the compressor behaves at different RPM and mass flow conditions.
+
+### Off-design at a single operating point
+
+```python
+from astraturbo.design import meanline_compressor, off_design_compressor
+
+# Design the compressor
+design = meanline_compressor(
+    overall_pressure_ratio=2.1, mass_flow=20.0,
+    rpm=17189, r_hub=0.178, r_tip=0.252,
+)
+
+# Evaluate at reduced mass flow
+od = off_design_compressor(design, mass_flow=16.0, rpm=17189)
+print(f"PR = {od.overall_pr:.3f}")
+print(f"Efficiency = {od.overall_efficiency:.4f}")
+print(f"Stalled = {od.is_stalled}")
+
+# Per-stage details
+for s in od.stages:
+    print(f"  Stage {s['stage']}: DF={s['DF']:.3f}, incidence={s['incidence_deg']:.1f} deg")
+```
+
+### Generate a compressor map
+
+```python
+from astraturbo.design import generate_compressor_map
+
+cmap = generate_compressor_map(
+    design,
+    rpm_fractions=[0.7, 0.85, 1.0, 1.05],
+    n_points=15,
+)
+print(cmap.summary())
+# Prints speed lines with mass flow, PR, eta, stall/choke flags
+# Plus surge line connecting stall points across speeds
+```
+
+### From the CLI
+
+```bash
+# Single off-design point
+python -m astraturbo meanline --pr 2.1 --mass-flow 20 --rpm 17189 \
+  --r-hub 0.178 --r-tip 0.252 --off-design
+
+# Full compressor map
+python -m astraturbo meanline --pr 2.1 --mass-flow 20 --rpm 17189 \
+  --r-hub 0.178 --r-tip 0.252 --map
+
+# Custom speed lines
+python -m astraturbo meanline --pr 2.1 --mass-flow 20 --rpm 17189 \
+  --r-hub 0.178 --r-tip 0.252 --map --rpm-fractions "0.7,0.85,1.0,1.05"
+```
+
+### From the GUI
+
+1. **Compute > Meanline Design** — enter your requirements
+2. A dialog asks "Generate Compressor Map" — check the box
+3. The result includes speed line tables, surge points, and surge margin
+
+---
+
 ## Module Reference
 
 | Module | Import | Purpose |
@@ -533,6 +598,8 @@ Run the full validation suite: `python -m pytest tests/test_validation/test_nasa
 | `astraturbo.blade` | `from astraturbo.blade import BladeRow` | 3D blade geometry |
 | `astraturbo.design.meanline` | `from astraturbo.design.meanline import meanline_compressor` | Meanline analysis with radial output |
 | `astraturbo.design.meanline` | `from astraturbo.design.meanline import blade_angle_to_cl0` | Lieblein cl0 correlation |
+| `astraturbo.design.off_design` | `from astraturbo.design import off_design_compressor` | Off-design meanline analysis |
+| `astraturbo.design.compressor_map` | `from astraturbo.design import generate_compressor_map` | Compressor map generation |
 | `astraturbo.nurbs` | `from astraturbo.nurbs import interpolate_3d` | NURBS utilities |
 | `astraturbo.machine` | `from astraturbo.machine import TurboMachine` | Machine container |
 | `astraturbo.mesh` | `from astraturbo.mesh import SCMMesher, OGridGenerator` | Mesh generation |
@@ -565,7 +632,7 @@ Run the full validation suite: `python -m pytest tests/test_validation/test_nasa
 | `astraturbo ai` | AI design assistant (interactive chat) |
 | `astraturbo profile [options]` | Generate a 2D blade profile |
 | `astraturbo mesh [options]` | Generate a mesh (`--3d` for 3D, `--with-bcs` for CGNS BCs) |
-| `astraturbo meanline [options]` | Meanline design (`--radial-stations N` for radial output) |
+| `astraturbo meanline [options]` | Meanline design (`--off-design`, `--map`, `--radial-stations N`) |
 | `astraturbo cfd [options]` | CFD case setup (`--compressible` for rhoSimpleFoam) |
 | `astraturbo fea [options]` | FEA structural analysis |
 | `astraturbo yplus [options]` | y+ / cell height calculator |
@@ -599,5 +666,6 @@ AstraTurbo includes validation against published data:
 | Thermodynamics | First principles | Isentropic relations, energy conservation |
 | Mesh quality | Engineering bounds | Aspect ratio, skewness metrics |
 | **NASA Rotor 37** | **NASA TP-1138** | **Overall PR, temperature ratio, radial trends, end-to-end pipeline** |
+| **Off-design & maps** | **Physical consistency** | **Incidence, loss trends, stall detection, speed line ordering, surge margin** |
 
 Run all validation tests: `python -m pytest tests/test_validation/ -v`
