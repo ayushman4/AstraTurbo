@@ -11,56 +11,142 @@ gas turbine engines:
   6. Thermal Barrier Coatings (TBC) — insulation, oxidation protection
   7. Cobalt / exotic alloys — corrosion-resistant hot section
 
-All properties are at room temperature (20-25 C) unless noted.
-For temperature-dependent properties, use max_service_temperature
-as the upper bound for applicability.
+Room-temperature values are stored as base properties. Temperature-dependent
+tables are provided for key engine alloys (Inconel 718, CMSX-4, Ti-6Al-4V,
+and others) — use ``youngs_modulus_at(T)``, ``yield_strength_at(T)``, and
+``thermal_conductivity_at(T)`` for hot-section analysis.
 
 Sources: MMPDS, ASM International, alloy manufacturer datasheets.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
 class Material:
-    """Material properties for structural analysis."""
+    """Material properties for structural analysis.
+
+    Base properties are at room temperature (~293 K). For hot-section
+    analysis, use the ``_at(T)`` methods which interpolate from
+    temperature-dependent tables when available, falling back to the
+    room-temperature value if no table is provided.
+    """
 
     name: str
     category: str                       # nickel, titanium, steel, aluminum, cmc, coating, cobalt
     density: float                      # kg/m³
-    youngs_modulus: float               # Pa (E)
+    youngs_modulus: float               # Pa (E) at ~293 K
     poisson_ratio: float                # dimensionless (nu)
-    yield_strength: float               # Pa
-    ultimate_strength: float            # Pa
-    thermal_conductivity: float         # W/(m·K)
+    yield_strength: float               # Pa at ~293 K
+    ultimate_strength: float            # Pa at ~293 K
+    thermal_conductivity: float         # W/(m·K) at ~293 K
     specific_heat: float                # J/(kg·K)
     thermal_expansion: float            # 1/K (CTE)
     max_service_temperature: float      # K
     fatigue_limit: float = 0.0          # Pa (endurance limit at 10^7 cycles)
     description: str = ""               # Typical application
 
-    def to_calculix_format(self) -> str:
-        """Format material for CalculiX input file."""
+    # Temperature-dependent tables: list of (T_kelvin, value) tuples,
+    # sorted by ascending temperature.  When present, the _at(T) methods
+    # linearly interpolate; when absent they return the room-temp value.
+    youngs_modulus_table: list[tuple[float, float]] = field(default_factory=list)
+    yield_strength_table: list[tuple[float, float]] = field(default_factory=list)
+    thermal_conductivity_table: list[tuple[float, float]] = field(default_factory=list)
+
+    # ------------------------------------------------------------------
+    # Temperature-dependent interpolation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _interp(table: list[tuple[float, float]], T: float, fallback: float) -> float:
+        """Linearly interpolate a (T, value) table at temperature T."""
+        if not table:
+            return fallback
+        if T <= table[0][0]:
+            return table[0][1]
+        if T >= table[-1][0]:
+            return table[-1][1]
+        for i in range(len(table) - 1):
+            t0, v0 = table[i]
+            t1, v1 = table[i + 1]
+            if t0 <= T <= t1:
+                frac = (T - t0) / (t1 - t0) if t1 != t0 else 0.0
+                return v0 + frac * (v1 - v0)
+        return fallback
+
+    def youngs_modulus_at(self, T: float) -> float:
+        """Young's modulus (Pa) at temperature T (K)."""
+        return self._interp(self.youngs_modulus_table, T, self.youngs_modulus)
+
+    def yield_strength_at(self, T: float) -> float:
+        """Yield strength (Pa) at temperature T (K)."""
+        return self._interp(self.yield_strength_table, T, self.yield_strength)
+
+    def thermal_conductivity_at(self, T: float) -> float:
+        """Thermal conductivity (W/m-K) at temperature T (K)."""
+        return self._interp(self.thermal_conductivity_table, T, self.thermal_conductivity)
+
+    def properties_at(self, T: float) -> dict[str, float]:
+        """Return all temperature-dependent properties at T (K)."""
+        return {
+            "temperature_K": T,
+            "youngs_modulus_Pa": self.youngs_modulus_at(T),
+            "yield_strength_Pa": self.yield_strength_at(T),
+            "thermal_conductivity_W_mK": self.thermal_conductivity_at(T),
+            "youngs_modulus_GPa": self.youngs_modulus_at(T) / 1e9,
+            "yield_strength_MPa": self.yield_strength_at(T) / 1e6,
+            "has_temp_data": bool(self.youngs_modulus_table),
+        }
+
+    def to_calculix_format(self, temperature: float | None = None) -> str:
+        """Format material for CalculiX input file.
+
+        Args:
+            temperature: If given, output temperature-dependent cards
+                using the full table. If None, output room-temp values.
+        """
         lines = [
             f"*MATERIAL, NAME={self.name}",
-            "*ELASTIC",
-            f"{self.youngs_modulus:.3e}, {self.poisson_ratio}",
-            "*DENSITY",
-            f"{self.density}",
-            "*EXPANSION",
-            f"{self.thermal_expansion}",
-            "*CONDUCTIVITY",
-            f"{self.thermal_conductivity}",
-            "*SPECIFIC HEAT",
-            f"{self.specific_heat}",
         ]
+
+        # Elastic — temperature-dependent if table available
+        lines.append("*ELASTIC")
+        if self.youngs_modulus_table and temperature is None:
+            # Write full table for CalculiX temperature interpolation
+            for T, E in self.youngs_modulus_table:
+                lines.append(f"{E:.3e}, {self.poisson_ratio}, {T:.1f}")
+        elif temperature is not None and self.youngs_modulus_table:
+            E_at_T = self.youngs_modulus_at(temperature)
+            lines.append(f"{E_at_T:.3e}, {self.poisson_ratio}, {temperature:.1f}")
+        else:
+            lines.append(f"{self.youngs_modulus:.3e}, {self.poisson_ratio}")
+
+        lines.append("*DENSITY")
+        lines.append(f"{self.density}")
+        lines.append("*EXPANSION")
+        lines.append(f"{self.thermal_expansion}")
+
+        # Conductivity — temperature-dependent if table available
+        lines.append("*CONDUCTIVITY")
+        if self.thermal_conductivity_table and temperature is None:
+            for T, k in self.thermal_conductivity_table:
+                lines.append(f"{k}, {T:.1f}")
+        elif temperature is not None and self.thermal_conductivity_table:
+            k_at_T = self.thermal_conductivity_at(temperature)
+            lines.append(f"{k_at_T}, {temperature:.1f}")
+        else:
+            lines.append(f"{self.thermal_conductivity}")
+
+        lines.append("*SPECIFIC HEAT")
+        lines.append(f"{self.specific_heat}")
+
         return "\n".join(lines)
 
-    def to_abaqus_format(self) -> str:
+    def to_abaqus_format(self, temperature: float | None = None) -> str:
         """Format material for Abaqus input file (same as CalculiX)."""
-        return self.to_calculix_format()
+        return self.to_calculix_format(temperature)
 
 
 # =====================================================================
@@ -75,6 +161,19 @@ INCONEL_718 = Material(
     thermal_expansion=13.0e-6, max_service_temperature=973.0,
     fatigue_limit=550e6,
     description="Workhorse superalloy — compressor disks, LP turbine",
+    # MMPDS / Special Metals data
+    youngs_modulus_table=[
+        (293, 200e9), (473, 190e9), (573, 184e9), (673, 176e9),
+        (773, 167e9), (873, 156e9), (973, 140e9),
+    ],
+    yield_strength_table=[
+        (293, 1035e6), (473, 980e6), (573, 950e6), (673, 910e6),
+        (773, 860e6), (873, 740e6), (973, 580e6),
+    ],
+    thermal_conductivity_table=[
+        (293, 11.4), (473, 14.1), (573, 15.9), (673, 17.8),
+        (773, 19.6), (873, 21.5), (973, 23.6),
+    ],
 )
 
 INCONEL_625 = Material(
@@ -115,6 +214,19 @@ HASTELLOY_X = Material(
     thermal_expansion=13.8e-6, max_service_temperature=1473.0,
     fatigue_limit=260e6,
     description="Oxidation resistant — combustors, afterburners",
+    # Haynes International data
+    youngs_modulus_table=[
+        (293, 205e9), (473, 196e9), (673, 184e9), (873, 170e9),
+        (1073, 153e9), (1273, 130e9), (1473, 105e9),
+    ],
+    yield_strength_table=[
+        (293, 360e6), (473, 310e6), (673, 280e6), (873, 260e6),
+        (1073, 230e6), (1273, 170e6), (1473, 100e6),
+    ],
+    thermal_conductivity_table=[
+        (293, 9.2), (473, 12.0), (673, 16.0), (873, 20.0),
+        (1073, 23.5), (1273, 26.5), (1473, 29.0),
+    ],
 )
 
 WASPALOY = Material(
@@ -145,6 +257,19 @@ CMSX_4 = Material(
     thermal_expansion=12.5e-6, max_service_temperature=1373.0,
     fatigue_limit=400e6,
     description="1st gen single crystal — HP turbine blades",
+    # Cannon-Muskegon / open literature data for <001> orientation
+    youngs_modulus_table=[
+        (293, 130e9), (473, 126e9), (673, 120e9), (873, 110e9),
+        (1073, 95e9), (1173, 85e9), (1273, 72e9), (1373, 58e9),
+    ],
+    yield_strength_table=[
+        (293, 950e6), (473, 920e6), (673, 880e6), (873, 820e6),
+        (1073, 680e6), (1173, 520e6), (1273, 380e6), (1373, 250e6),
+    ],
+    thermal_conductivity_table=[
+        (293, 12.0), (473, 14.0), (673, 16.5), (873, 19.5),
+        (1073, 22.5), (1273, 25.5), (1373, 27.0),
+    ],
 )
 
 PWA_1484 = Material(
@@ -165,6 +290,18 @@ RENE_N5 = Material(
     thermal_expansion=12.3e-6, max_service_temperature=1383.0,
     fatigue_limit=420e6,
     description="2nd gen single crystal — turbine (GE)",
+    youngs_modulus_table=[
+        (293, 131e9), (473, 127e9), (673, 121e9), (873, 112e9),
+        (1073, 97e9), (1173, 87e9), (1273, 74e9), (1383, 57e9),
+    ],
+    yield_strength_table=[
+        (293, 960e6), (473, 930e6), (673, 890e6), (873, 830e6),
+        (1073, 700e6), (1173, 550e6), (1273, 400e6), (1383, 260e6),
+    ],
+    thermal_conductivity_table=[
+        (293, 11.5), (473, 13.5), (673, 16.0), (873, 19.5),
+        (1073, 23.0), (1273, 26.0), (1383, 28.0),
+    ],
 )
 
 MAR_M_247 = Material(
@@ -200,6 +337,16 @@ TI_6AL_4V = Material(
     thermal_expansion=8.6e-6, max_service_temperature=673.0,
     fatigue_limit=510e6,
     description="Most common Ti alloy — fan, LP compressor",
+    # MMPDS / ASM Ti data
+    youngs_modulus_table=[
+        (293, 113.8e9), (373, 110e9), (473, 105e9), (573, 98e9), (673, 90e9),
+    ],
+    yield_strength_table=[
+        (293, 880e6), (373, 810e6), (473, 720e6), (573, 600e6), (673, 480e6),
+    ],
+    thermal_conductivity_table=[
+        (293, 6.7), (373, 7.4), (473, 8.7), (573, 10.3), (673, 12.0),
+    ],
 )
 
 TI_6242 = Material(
@@ -393,6 +540,18 @@ HAYNES_188 = Material(
     thermal_expansion=12.8e-6, max_service_temperature=1363.0,
     fatigue_limit=280e6,
     description="Cobalt superalloy — combustor, transition ducts",
+    youngs_modulus_table=[
+        (293, 232e9), (473, 222e9), (673, 210e9), (873, 195e9),
+        (1073, 176e9), (1273, 150e9), (1363, 138e9),
+    ],
+    yield_strength_table=[
+        (293, 455e6), (473, 380e6), (673, 330e6), (873, 300e6),
+        (1073, 250e6), (1273, 170e6), (1363, 120e6),
+    ],
+    thermal_conductivity_table=[
+        (293, 10.4), (473, 13.2), (673, 17.0), (873, 21.0),
+        (1073, 24.5), (1273, 27.5), (1363, 29.0),
+    ],
 )
 
 HAYNES_25_L605 = Material(

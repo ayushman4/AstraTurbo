@@ -30,7 +30,7 @@ python -m astraturbo --version
 # astraturbo 0.1.0
 
 python -m pytest tests/ -q
-# 416 passed
+# 416+ passed
 ```
 
 ---
@@ -615,6 +615,7 @@ python -m astraturbo meanline --pr 2.1 --mass-flow 20 --rpm 17189 \
 | `astraturbo.cfd` | `from astraturbo.cfd import CFDWorkflow, CFDWorkflowConfig` | CFD workflow (compressible + incompressible) |
 | `astraturbo.cfd` | `from astraturbo.cfd import create_openfoam_case` | OpenFOAM case (rhoSimpleFoam/simpleFoam) |
 | `astraturbo.fea` | `from astraturbo.fea import FEAWorkflow, get_material` | Structural analysis |
+| `astraturbo.fea.material` | `mat.youngs_modulus_at(T)`, `mat.properties_at(T)` | Temperature-dependent properties |
 | `astraturbo.optimization` | `from astraturbo.optimization import Optimizer` | Design optimization |
 | `astraturbo.foundation` | `from astraturbo.foundation.design_chain import DesignChain` | Auto-propagating design pipeline |
 | `astraturbo.database` | `from astraturbo.database import DesignDatabase` | Design database (SQLite) |
@@ -669,5 +670,6 @@ AstraTurbo includes validation against published data:
 | Mesh quality | Engineering bounds | Aspect ratio, skewness metrics |
 | **NASA Rotor 37** | **NASA TP-1138** | **Overall PR, temperature ratio, radial trends, end-to-end pipeline** |
 | **Off-design & maps** | **Physical consistency** | **Incidence, loss trends, stall detection, speed line ordering, surge margin** |
+| **Temperature materials** | **MMPDS / ASM data** | **E(T), yield(T), k(T) interpolation for Inconel 718, CMSX-4, Ti-6Al-4V, +3 more** |
 
 Run all validation tests: `python -m pytest tests/test_validation/ -v`

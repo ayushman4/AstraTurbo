@@ -242,7 +242,8 @@ _register(
     "setup_fea",
     "Set up finite element structural analysis for a blade. "
     "Generates CalculiX/Abaqus input files with centrifugal loads, "
-    "material properties, and boundary conditions.",
+    "material properties, and boundary conditions. Supports temperature-dependent "
+    "properties — pass operating_temperature to use hot-section material data.",
     {
         "type": "object",
         "properties": {
@@ -258,6 +259,11 @@ _register(
                 "type": "string",
                 "enum": ["static", "frequency", "buckle"],
                 "description": "Analysis type (default static)",
+            },
+            "operating_temperature": {
+                "type": "number",
+                "description": "Operating temperature (K) for temperature-dependent material properties. "
+                "Critical for turbine blades (typically 900-1300 K).",
             },
             "output_dir": {
                 "type": "string",
@@ -395,11 +401,17 @@ _register(
 
 _register(
     "list_materials",
-    "List all available materials in the database with their properties "
-    "(Young's modulus, yield strength, max temperature, etc.)",
+    "List all 32 available materials with properties. Materials marked [T(K)] have "
+    "temperature-dependent data (E, yield, conductivity vs temperature). Pass a "
+    "temperature to see hot-section properties — critical for turbine blade analysis.",
     {
         "type": "object",
-        "properties": {},
+        "properties": {
+            "temperature": {
+                "type": "number",
+                "description": "Operating temperature (K) to show interpolated properties for materials with temp data",
+            },
+        },
     },
 )
 
@@ -1037,16 +1049,38 @@ def _exec_fea(inputs: dict) -> str:
         analysis_type=inputs.get("analysis_type", "static"),
     )
 
-    return (
+    op_temp = inputs.get("operating_temperature", None)
+
+    output = (
         f"FEA Configuration:\n"
         f"Material: {material.name}\n"
         f"  E = {material.youngs_modulus/1e9:.0f} GPa\n"
         f"  Yield = {material.yield_strength/1e6:.0f} MPa\n"
         f"  Max temp = {material.max_service_temperature:.0f} K\n"
-        f"Omega: {cfg.omega} rad/s\n"
+    )
+
+    if op_temp and material.youngs_modulus_table:
+        T = float(op_temp)
+        props = material.properties_at(T)
+        E_ratio = props['youngs_modulus_Pa'] / material.youngs_modulus
+        Sy_ratio = props['yield_strength_Pa'] / material.yield_strength
+        output += (
+            f"\n  At {T:.0f} K (temperature-dependent):\n"
+            f"    E = {props['youngs_modulus_GPa']:.1f} GPa ({E_ratio:.0%} of room temp)\n"
+            f"    Yield = {props['yield_strength_MPa']:.0f} MPa ({Sy_ratio:.0%} of room temp)\n"
+            f"    k = {props['thermal_conductivity_W_mK']:.1f} W/m-K\n"
+        )
+        if T > material.max_service_temperature:
+            output += f"    WARNING: {T:.0f} K exceeds max service temp {material.max_service_temperature:.0f} K!\n"
+    elif op_temp:
+        output += f"\n  WARNING: No temperature-dependent data for {material.name}. Using room-temp values.\n"
+
+    output += (
+        f"\nOmega: {cfg.omega} rad/s\n"
         f"Analysis: {cfg.analysis_type}\n"
         f"\nTo generate input files, provide blade surface geometry.\n"
     )
+    return output
 
 
 def _exec_yplus(inputs: dict) -> str:
@@ -1139,14 +1173,31 @@ def _exec_inspect(inputs: dict) -> str:
 
 def _exec_list_materials(inputs: dict) -> str:
     from astraturbo.fea import list_materials, get_material
+    temperature = inputs.get("temperature", None)
     lines = ["Available materials:\n"]
     for name in list_materials():
         mat = get_material(name)
-        lines.append(
+        temp_flag = " [T(K)]" if mat.youngs_modulus_table else ""
+        line = (
             f"  {name:20s} E={mat.youngs_modulus/1e9:.0f} GPa, "
             f"yield={mat.yield_strength/1e6:.0f} MPa, "
-            f"Tmax={mat.max_service_temperature:.0f} K"
+            f"Tmax={mat.max_service_temperature:.0f} K{temp_flag}"
         )
+        if temperature and mat.youngs_modulus_table:
+            T = float(temperature)
+            props = mat.properties_at(T)
+            line += (
+                f"\n  {'':20s} At {T:.0f} K: "
+                f"E={props['youngs_modulus_GPa']:.1f} GPa, "
+                f"yield={props['yield_strength_MPa']:.0f} MPa"
+            )
+        lines.append(line)
+
+    if temperature:
+        lines.append(f"\n  Properties shown at {float(temperature):.0f} K for materials with [T(K)] data")
+    else:
+        lines.append("\n  [T(K)] = temperature-dependent data available. "
+                     "Pass temperature parameter to see hot properties.")
     return "\n".join(lines)
 
 

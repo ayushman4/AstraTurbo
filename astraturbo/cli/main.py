@@ -169,6 +169,8 @@ def main():
     fea_parser.add_argument("--ni", type=int, default=20, help="Surface grid points in streamwise dir")
     fea_parser.add_argument("--nj", type=int, default=10, help="Surface grid points in spanwise dir")
     fea_parser.add_argument("--list-materials", action="store_true", help="List available materials")
+    fea_parser.add_argument("--temperature", type=float, default=None,
+                           help="Operating temperature (K) for temperature-dependent properties")
     fea_parser.add_argument("-o", "--output", default="fea_case", help="Output case directory")
 
     # --- optimize ---
@@ -882,11 +884,13 @@ def _cmd_fea(args):
             print(f"  [{cat.upper()}]")
             for name in cat_materials:
                 mat = get_material(name)
+                temp_marker = " [T(K)]" if mat.youngs_modulus_table else ""
                 print(f"    {name:20s}  E={mat.youngs_modulus/1e9:>6.0f} GPa, "
                       f"yield={mat.yield_strength/1e6:>5.0f} MPa, "
                       f"Tmax={mat.max_service_temperature:>5.0f} K  "
-                      f"({mat.description})")
+                      f"({mat.description}){temp_marker}")
             print()
+        print("  [T(K)] = temperature-dependent data available")
         return
 
     try:
@@ -894,6 +898,23 @@ def _cmd_fea(args):
     except ValueError as e:
         print(f"ERROR: {e}")
         sys.exit(1)
+
+    # Show temperature-dependent properties if temperature specified
+    op_temp = getattr(args, 'temperature', None)
+    if op_temp is not None:
+        props = material.properties_at(op_temp)
+        print(f"Material: {material.name} at {op_temp:.0f} K")
+        print(f"  E  = {props['youngs_modulus_GPa']:.1f} GPa "
+              f"(room temp: {material.youngs_modulus/1e9:.1f} GPa, "
+              f"ratio: {props['youngs_modulus_Pa']/material.youngs_modulus:.2f})")
+        print(f"  Sy = {props['yield_strength_MPa']:.0f} MPa "
+              f"(room temp: {material.yield_strength/1e6:.0f} MPa, "
+              f"ratio: {props['yield_strength_Pa']/material.yield_strength:.2f})")
+        print(f"  k  = {props['thermal_conductivity_W_mK']:.1f} W/m-K "
+              f"(room temp: {material.thermal_conductivity:.1f} W/m-K)")
+        if not props['has_temp_data']:
+            print("  WARNING: No temperature-dependent data — using room-temp values")
+        print()
 
     output = Path(args.output)
     cfg = FEAWorkflowConfig(
@@ -922,10 +943,18 @@ def _cmd_fea(args):
 
         # Quick stress estimate
         estimate = fea.estimate_stress_analytical()
+        yield_at_T = material.yield_strength_at(op_temp) if op_temp else material.yield_strength
+        safety_at_T = yield_at_T / (estimate['centrifugal_stress_MPa'] * 1e6) if estimate['centrifugal_stress_MPa'] > 0 else float('inf')
         print(f"\n  Analytical stress estimate:")
         print(f"    Centrifugal: {estimate['centrifugal_stress_MPa']:.1f} MPa")
-        print(f"    Yield:       {material.yield_strength/1e6:.0f} MPa")
-        print(f"    Safety:      {estimate['safety_factor']:.2f}")
+        if op_temp and material.yield_strength_table:
+            print(f"    Yield at {op_temp:.0f} K: {yield_at_T/1e6:.0f} MPa "
+                  f"(room temp: {material.yield_strength/1e6:.0f} MPa)")
+            print(f"    Safety (at temp): {safety_at_T:.2f}")
+            print(f"    Safety (room):    {estimate['safety_factor']:.2f}")
+        else:
+            print(f"    Yield:       {material.yield_strength/1e6:.0f} MPa")
+            print(f"    Safety:      {estimate['safety_factor']:.2f}")
 
         print(f"\n  Next steps:")
         print(f"    cd {output} && bash run_fea.sh  (requires CalculiX)")

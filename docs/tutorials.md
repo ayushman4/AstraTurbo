@@ -577,6 +577,40 @@ print(f"Centrifugal stress: {estimate['centrifugal_stress_MPa']:.1f} MPa")
 print(f"Safety factor: {estimate['safety_factor']:.2f}")
 ```
 
+### Temperature-dependent analysis
+
+For hot-section parts (turbine blades, combustor liners), use temperature-
+dependent properties to get accurate stress and safety factors.
+
+```python
+from astraturbo.fea import get_material
+
+mat = get_material("cmsx_4")  # Single crystal turbine blade alloy
+
+# Room temperature
+print(f"CMSX-4 at room temp:")
+print(f"  E = {mat.youngs_modulus/1e9:.0f} GPa, Yield = {mat.yield_strength/1e6:.0f} MPa")
+
+# At turbine operating temperature (1100K)
+props = mat.properties_at(1073)
+print(f"\nCMSX-4 at 1073 K:")
+print(f"  E = {props['youngs_modulus_GPa']:.1f} GPa")
+print(f"  Yield = {props['yield_strength_MPa']:.0f} MPa")
+# E drops ~27%, yield drops ~28% — changes safety factor significantly
+
+# Compare safety factors
+centrifugal_stress_MPa = 400  # example
+sf_room = mat.yield_strength / (centrifugal_stress_MPa * 1e6)
+sf_hot = mat.yield_strength_at(1073) / (centrifugal_stress_MPa * 1e6)
+print(f"\nSafety factor (room temp): {sf_room:.2f}")
+print(f"Safety factor (1073 K):    {sf_hot:.2f}")
+```
+
+Materials with temperature data: Inconel 718, CMSX-4, Ti-6Al-4V,
+Hastelloy X, Rene N5, Haynes 188. Use `mat.youngs_modulus_table` to check.
+
+CLI: `python -m astraturbo fea --material cmsx_4 --temperature 1073 --list-materials`
+
 ---
 
 ## Tutorial 9: AI Assistant

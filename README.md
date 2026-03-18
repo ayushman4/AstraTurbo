@@ -42,7 +42,7 @@ python -m astraturbo --version
 # astraturbo 0.1.0
 
 python -m pytest tests/ -q
-# 400+ passed
+# 416+ passed
 ```
 
 ---
@@ -225,6 +225,11 @@ python -m astraturbo pipeline --pr 2.1 --mass-flow 20 --rpm 17189 \
 ```bash
 python -m astraturbo fea --list-materials
 python -m astraturbo fea --material inconel_718 --omega 1200 --surface blade.csv -o fea_case
+
+# Temperature-dependent analysis (hot-section blade at 973K)
+python -m astraturbo fea --material inconel_718 --temperature 973 \
+  --omega 1200 --surface blade.csv -o fea_case
+# Shows: E at 973K = 140 GPa (vs 200 GPa room), safety factor at temp vs room
 ```
 
 ### Other commands
@@ -628,7 +633,9 @@ write_mesh("output.su2", points, cells)
 
 ## Material Database
 
-32 aerospace-grade materials across 7 categories:
+32 aerospace-grade materials across 7 categories. **6 key alloys include temperature-dependent
+property tables** (E, yield, thermal conductivity vs temperature) for hot-section analysis —
+critical for turbine blade and combustor design.
 
 ### Nickel Superalloys (12) — Hot section
 
@@ -686,6 +693,12 @@ write_mesh("output.su2", points, cells)
 from astraturbo.fea import get_material, list_materials
 mat = get_material("inconel_718")
 print(mat.to_calculix_format())  # Ready for FEA input
+
+# Temperature-dependent properties for hot-section analysis
+props = mat.properties_at(973)  # At 973 K (max service temp)
+print(f"E at 973K: {props['youngs_modulus_GPa']:.1f} GPa (room: 200 GPa)")
+print(f"Yield at 973K: {props['yield_strength_MPa']:.0f} MPa (room: 1035 MPa)")
+# E at 973K: 140.0 GPa, Yield at 973K: 580 MPa — 30-44% reduction!
 ```
 
 ---
@@ -718,7 +731,7 @@ All cross-platform (Windows, Linux, macOS).
 ```bash
 pip install -e ".[dev]"
 pytest tests/ -v
-# 400+ tests pass (unit, integration, validation, GUI, CLI)
+# 416+ tests pass (unit, integration, validation, GUI, CLI)
 ```
 
 ### Test coverage

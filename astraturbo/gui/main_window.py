@@ -1325,6 +1325,16 @@ class MainWindow(QMainWindow):
         if not ok:
             return
 
+        # Operating temperature for temperature-dependent properties
+        op_temp, ok = QInputDialog.getDouble(
+            self, "FEA Setup",
+            "Operating Temperature (K, 0 = room temp):",
+            0.0, 0, 2000, 0,
+        )
+        if not ok:
+            return
+        op_temp = op_temp if op_temp > 0 else None
+
         path, _ = QFileDialog.getSaveFileName(
             self, "FEA Case Directory", "fea_case"
         )
@@ -1355,15 +1365,35 @@ class MainWindow(QMainWindow):
 
                 estimate = fea.estimate_stress_analytical()
 
+                # Temperature-dependent properties
+                if op_temp and material.youngs_modulus_table:
+                    props = material.properties_at(op_temp)
+                    yield_at_T = material.yield_strength_at(op_temp)
+                    sf_at_T = (yield_at_T / (estimate['centrifugal_stress_MPa'] * 1e6)
+                               if estimate['centrifugal_stress_MPa'] > 0 else float('inf'))
+                    temp_info = (
+                        f"\nAt {op_temp:.0f} K:\n"
+                        f"  E = {props['youngs_modulus_GPa']:.1f} GPa "
+                        f"(room: {material.youngs_modulus/1e9:.1f})\n"
+                        f"  Yield = {props['yield_strength_MPa']:.0f} MPa "
+                        f"(room: {material.yield_strength/1e6:.0f})\n"
+                        f"  Safety factor (at temp): {sf_at_T:.2f}\n"
+                        f"  Safety factor (room): {estimate['safety_factor']:.2f}"
+                    )
+                else:
+                    temp_info = (
+                        f"\nYield strength: {material.yield_strength/1e6:.0f} MPa\n"
+                        f"Safety factor: {estimate['safety_factor']:.2f}"
+                    )
+
                 QMessageBox.information(
                     self, "FEA Case Created",
                     f"Material: {material.name}\n"
                     f"Omega: {omega} rad/s\n"
                     f"Directory: {case}\n\n"
                     f"Analytical Estimate:\n"
-                    f"  Centrifugal stress: {estimate['centrifugal_stress_MPa']:.1f} MPa\n"
-                    f"  Yield strength: {material.yield_strength/1e6:.0f} MPa\n"
-                    f"  Safety factor: {estimate['safety_factor']:.2f}\n\n"
+                    f"  Centrifugal stress: {estimate['centrifugal_stress_MPa']:.1f} MPa"
+                    f"{temp_info}\n\n"
                     f"Next: cd {case} && bash run_fea.sh  (requires CalculiX)"
                 )
                 self.statusBar().showMessage(
