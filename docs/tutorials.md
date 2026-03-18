@@ -714,6 +714,211 @@ for sp in result.spools:
 
 ---
 
+## Tutorial 6e: Electric Motor Sizing
+
+Size electric motors for eVTOL, hybrid-electric, and UAV propulsion systems.
+The solver estimates torque, current draw, efficiency, and motor weight from
+top-level power requirements.
+
+### Python API
+
+```python
+from astraturbo.design import electric_motor
+
+result = electric_motor(
+    shaft_power=50000,   # W (50 kW)
+    rpm=8000,
+    voltage=400,         # V DC bus
+)
+print(result.summary())
+# Motor torque, phase current, efficiency, weight estimate
+
+# Access individual fields
+print(f"Torque: {result.torque:.2f} N·m")
+print(f"Current: {result.current:.1f} A")
+print(f"Efficiency: {result.efficiency:.4f}")
+print(f"Estimated weight: {result.weight_kg:.2f} kg")
+```
+
+### CLI
+
+```bash
+python -m astraturbo electric-motor --power 50000 --rpm 8000 --voltage 400
+```
+
+---
+
+## Tutorial 6f: Propeller Design
+
+Design propellers for UAV, eVTOL, and general aviation applications.
+The solver computes blade twist and chord distributions, advance ratio,
+and propulsive efficiency using blade element momentum theory.
+
+### Python API
+
+```python
+from astraturbo.design import propeller_design
+
+result = propeller_design(
+    thrust_required=50.0,  # N required thrust
+    n_blades=3,
+    diameter=0.5,          # m
+    rpm=8000,
+)
+print(result.summary())
+# Thrust, power, FM (hover), advance ratio, CT/CP, tip Mach
+
+print(f"Advance ratio J: {result.advance_ratio:.3f}")
+print(f"Figure of Merit: {result.figure_of_merit:.4f}")
+print(f"Power required: {result.power:.1f} W")
+```
+
+### CLI
+
+```bash
+python -m astraturbo propeller --thrust 50 --n-blades 3 --diameter 0.5 --rpm 8000
+```
+
+---
+
+## Tutorial 6g: Rocket Pump Design
+
+Design pumps for rocket engine turbopump assemblies. Supports common rocket
+propellants (LOX, RP-1, LH2, etc.) with fluid property lookups.
+
+### Python API
+
+```python
+from astraturbo.design import centrifugal_pump
+
+result = centrifugal_pump(
+    head=500.0,          # m (pump head rise)
+    flow_rate=0.1,       # m³/s
+    rpm=30000,
+    fluid_name="LOX",
+)
+print(result.summary())
+# Specific speed, impeller geometry, power, NPSH, efficiency
+
+print(f"Specific speed Ns: {result.specific_speed:.2f}")
+print(f"Power: {result.power_kW:.1f} kW")
+print(f"Efficiency: {result.efficiency:.4f}")
+```
+
+### CLI
+
+```bash
+python -m astraturbo pump --head 500 --flow-rate 0.1 --rpm 30000 --fluid LOX
+```
+
+---
+
+## Tutorial 6h: Integrated Turbopump Design
+
+Design a complete turbopump assembly (turbine-driven pump) for rocket engines.
+The solver sizes both the pump and the drive turbine, matching power and speed.
+
+### Python API
+
+```python
+from astraturbo.design import turbopump
+
+result = turbopump(
+    pump_head=500.0,            # m
+    pump_flow_rate=0.1,         # m³/s
+    fluid_density=1141.0,       # LOX density
+    fluid_name="LOX",
+    turbine_inlet_temp=900.0,   # K (gas generator exhaust)
+    turbine_inlet_pressure=5e6, # Pa
+    rpm=30000,
+)
+print(result.summary())
+# Pump + turbine sizing, power balance, overall efficiency
+
+print(f"Pump power: {result.pump_power/1000:.1f} kW")
+print(f"Turbine power: {result.turbine_power/1000:.1f} kW")
+print(f"Power margin: {result.power_margin:.2f}")
+```
+
+### CLI
+
+```bash
+python -m astraturbo turbopump --pump-head 500 --pump-flow 0.1 --fluid LOX \
+  --turbine-temp 900 --turbine-pressure 5000000 --rpm 30000
+```
+
+---
+
+## Tutorial 6i: Cooling System Analysis
+
+Analyse turbine blade and combustor cooling systems. Supports film cooling,
+convective cooling, and transpiration cooling models with effectiveness
+and coolant flow estimation.
+
+### Python API
+
+```python
+from astraturbo.design import cooling_flow
+
+result = cooling_flow(
+    T_gas=1700.0,           # K (hot gas temperature)
+    T_coolant=600.0,        # K (coolant inlet temperature)
+    cooling_type="film",    # "film", "convection", or "transpiration"
+)
+print(result.summary())
+# Per-row cooling effectiveness, coolant fraction, total coolant flow
+
+print(f"Overall effectiveness: {result.overall_effectiveness:.4f}")
+print(f"Total coolant fraction: {result.total_coolant_fraction:.4f}")
+print(f"Total coolant flow: {result.total_coolant_flow:.2f} kg/s")
+```
+
+### CLI
+
+```bash
+python -m astraturbo cooling --t-gas 1700 --t-coolant 600 --cooling-type film
+```
+
+---
+
+## Tutorial 6j: Engine Cycle with Afterburner and Nozzle Options
+
+Extend the engine cycle solver with afterburner reheat and convergent-divergent
+nozzle options for military-class turbojet analysis.
+
+### Python API
+
+```python
+from astraturbo.design import engine_cycle
+
+result = engine_cycle(
+    engine_type="turbojet",
+    overall_pressure_ratio=8.0,
+    turbine_inlet_temp=1400.0,
+    mass_flow=20.0,
+    rpm=15000,
+    r_hub=0.15, r_tip=0.30,
+    afterburner=True,
+    afterburner_temp=2000.0,
+    nozzle_type="convergent_divergent",
+    nozzle_design_mach=1.5,
+)
+print(result.summary())
+print(f"Net thrust: {result.net_thrust/1000:.1f} kN")
+print(f"Nozzle exit Mach: {result.nozzle.mach_exit:.2f}")
+if result.afterburner:
+    print(f"AB fuel flow: {result.afterburner_fuel_flow:.4f} kg/s")
+```
+
+### CLI
+
+```bash
+python -m astraturbo engine-cycle --opr 8 --tit 1400 --mass-flow 20 --rpm 15000 \
+  --afterburner --nozzle-type convergent_divergent
+```
+
+---
+
 ## Tutorial 7: Set Up a CFD Case
 
 ### OpenFOAM

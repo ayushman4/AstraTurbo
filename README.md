@@ -42,7 +42,7 @@ python -m astraturbo --version
 # astraturbo 0.1.0
 
 python -m pytest tests/ -q
-# 489+ passed
+# ~550 passed
 ```
 
 ---
@@ -253,6 +253,46 @@ python -m astraturbo engine-cycle --engine-type turboshaft --opr 8 --tit 1400 \
 # Twin-spool turbojet (Kaveri-class)
 python -m astraturbo engine-cycle --opr 20 --tit 1700 --mass-flow 20 --rpm 10000 \
   --n-spools 2 --hp-pr 4.5 --hp-rpm 15000
+```
+
+### Electric motor sizing
+
+```bash
+# Size an electric motor for eVTOL / hybrid-electric propulsion
+python -m astraturbo electric-motor --power 50000 --rpm 8000 --voltage 400
+```
+
+### Propeller design
+
+```bash
+# Design a propeller for UAV / eVTOL / general aviation
+python -m astraturbo propeller --thrust 50 --n-blades 3 --diameter 0.5 --rpm 8000
+```
+
+### Rocket turbopump design
+
+```bash
+# Standalone pump (LOX or fuel side)
+python -m astraturbo pump --head 500 --flow-rate 0.1 --rpm 30000 --fluid LOX
+
+# Integrated turbopump (turbine-driven pump assembly)
+python -m astraturbo turbopump --pump-head 500 --pump-flow 0.1 --fluid LOX \
+  --turbine-temp 900 --turbine-pressure 5000000 --rpm 30000
+```
+
+### Cooling system analysis
+
+```bash
+# Turbine blade / combustor cooling analysis
+python -m astraturbo cooling --t-gas 1700 --t-coolant 600 --cooling-type film
+```
+
+### Engine cycle with afterburner and nozzle
+
+```bash
+# Afterburning turbojet with convergent-divergent nozzle
+python -m astraturbo engine-cycle --opr 8 --tit 1400 --mass-flow 20 --rpm 15000 \
+  --afterburner --nozzle-type convergent_divergent
 ```
 
 ### Design reports
@@ -485,6 +525,76 @@ shaft = engine_cycle(
 print(f"Shaft power: {shaft.shaft_power/1000:.1f} kW")
 ```
 
+### Electric motor sizing
+
+```python
+from astraturbo.design import electric_motor
+
+result = electric_motor(
+    shaft_power=50000,   # W
+    rpm=8000,
+    voltage=400,         # V
+)
+print(result.summary())
+# Motor type, torque, current, efficiency, weight estimate
+```
+
+### Propeller design
+
+```python
+from astraturbo.design import propeller_design
+
+result = propeller_design(
+    thrust_required=50.0,  # N
+    n_blades=3,
+    diameter=0.5,          # m
+    rpm=8000,
+)
+print(result.summary())
+# Thrust, power, FM (hover), advance ratio, CT/CP, tip Mach
+```
+
+### Pump design (rocket turbopumps)
+
+```python
+from astraturbo.design import centrifugal_pump, turbopump
+
+# Standalone pump
+pump_result = centrifugal_pump(
+    head=500.0,          # m
+    flow_rate=0.1,       # m³/s
+    rpm=30000,
+    fluid_name="LOX",
+)
+print(pump_result.summary())
+
+# Integrated turbopump
+tp = turbopump(
+    pump_head=500.0,
+    pump_flow_rate=0.1,
+    fluid_density=1141.0,
+    fluid_name="LOX",
+    turbine_inlet_temp=900.0,
+    turbine_inlet_pressure=5e6,
+    rpm=30000,
+)
+print(tp.summary())
+```
+
+### Cooling system analysis
+
+```python
+from astraturbo.design import cooling_flow
+
+result = cooling_flow(
+    T_gas=1700.0,        # K (hot gas temperature)
+    T_coolant=600.0,     # K (coolant temperature)
+    cooling_type="film",
+)
+print(result.summary())
+# Per-row effectiveness, coolant fraction, total coolant mass flow
+```
+
 ### Generate a profile
 
 ```python
@@ -654,12 +764,14 @@ print(response2)
 assistant.reset()
 ```
 
-Claude calls 25 AstraTurbo tools directly —
+Claude calls 30 AstraTurbo tools directly —
 meanline design (axial compressor + centrifugal + turbine), engine cycle analysis
 (turbojet/turboshaft), off-design analysis,
 compressor maps, profile generation, 3D blade building, mesh generation and export,
 CFD setup, solver execution, FEA setup, y+ calculator, full design pipeline, design
-database, HTML report generation, file inspection, material database.
+database, HTML report generation, file inspection, material database,
+electric motor sizing, propeller design, turbopump analysis, rocket pump design,
+cooling system analysis.
 
 Setup:
 ```bash
@@ -673,8 +785,8 @@ export ANTHROPIC_API_KEY=sk-ant-api03-...
 
 ```
 astraturbo/
-├── ai/              Claude-powered AI assistant (25 tools, NL interface)
-├── design/          Velocity triangles, meanline (axial compressor + centrifugal + turbine), engine cycle, off-design, compressor maps
+├── ai/              Claude-powered AI assistant (30 tools, NL interface)
+├── design/          Velocity triangles, meanline (axial compressor + centrifugal + turbine), engine cycle, off-design, compressor maps, electric motor, propeller, pump, turbopump, cooling
 ├── foundation/      Property system, signals, undo/redo, serialization
 ├── baseclass/       ATObject, Node tree, Drawable mixin
 ├── camberline/      8 camber line types
@@ -710,7 +822,7 @@ astraturbo/
 ├── reports/         HTML design report generator
 ├── hpc/             HPC backends: Local, SLURM, PBS, AWS Batch + auto-provisioner
 ├── gui/             PySide6 GUI with 3D viewer + AI chat panel
-└── cli/             25+ commands (profile, mesh, blade, pipeline, meanline, cfd, fea, hpc, ...)
+└── cli/             30+ commands (profile, mesh, blade, pipeline, meanline, cfd, fea, hpc, electric-motor, propeller, pump, turbopump, cooling, ...)
 ```
 
 ### Design pipeline
@@ -880,12 +992,12 @@ All cross-platform (Windows, Linux, macOS).
 ```bash
 pip install -e ".[dev]"
 pytest tests/ -v
-# 474+ tests pass (unit, integration, validation, GUI, CLI)
+# 551+ tests pass (unit, integration, validation, GUI, CLI)
 ```
 
 ### Test coverage
 
-- **Unit tests**: Foundation, camberline, thickness, profile, blade, NURBS, mesh, export, design, FEA, CFD
+- **Unit tests**: Foundation, camberline, thickness, profile, blade, NURBS, mesh, export, design, FEA, CFD, electric motor, propeller, pump, turbopump, cooling
 - **Integration tests**: CLI commands (38 tests), GUI components (29 tests), AI tools (9 tests)
 - **Validation tests**: Velocity triangles, meanline thermodynamics, NACA 65 profiles, mesh quality bounds, off-design compressor maps, NASA Rotor 37
 - **Security tests**: XXE prevention, deserialization whitelisting, command injection prevention

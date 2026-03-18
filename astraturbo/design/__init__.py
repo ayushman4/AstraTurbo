@@ -60,13 +60,38 @@ from .turbine_off_design import (
 from .engine_cycle import (
     InletResult,
     CombustorResult,
+    AfterburnerResult,
     NozzleResult,
     EngineCycleResult,
     standard_atmosphere,
     inlet_model,
+    afterburner_model,
     combustor_model,
     nozzle_model,
     engine_cycle,
+)
+from .electric_motor import (
+    ElectricMotorResult,
+    electric_motor,
+)
+from .propeller import (
+    PropellerResult,
+    propeller_design,
+)
+from .pump import (
+    FLUIDS,
+    PumpResult,
+    centrifugal_pump,
+)
+from .turbopump import (
+    TurbopumpResult,
+    turbopump,
+)
+from .cooling import (
+    COOLING_PHI,
+    CoolingRowResult,
+    CoolingResult,
+    cooling_flow,
 )
 
 __all__ = [
@@ -100,11 +125,26 @@ __all__ = [
     "generate_turbine_map",
     "InletResult",
     "CombustorResult",
+    "AfterburnerResult",
     "NozzleResult",
     "EngineCycleResult",
     "standard_atmosphere",
     "inlet_model",
+    "afterburner_model",
     "combustor_model",
     "nozzle_model",
     "engine_cycle",
+    "ElectricMotorResult",
+    "electric_motor",
+    "PropellerResult",
+    "propeller_design",
+    "FLUIDS",
+    "PumpResult",
+    "centrifugal_pump",
+    "TurbopumpResult",
+    "turbopump",
+    "COOLING_PHI",
+    "CoolingRowResult",
+    "CoolingResult",
+    "cooling_flow",
 ]

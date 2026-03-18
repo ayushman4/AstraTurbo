@@ -381,3 +381,54 @@ class TestMultiSpool:
         assert result.n_spools == 2
         assert result.shaft_power > 0
         assert result.nozzle is None
+
+
+# ── Afterburner / Reheat Tests ────────────────────
+
+
+class TestAfterburner:
+    def test_afterburner_increases_thrust(self):
+        """Afterburner should significantly increase thrust."""
+        dry = _run_turbojet()
+        wet = _run_turbojet(afterburner=True, afterburner_temp=2000.0)
+        assert wet.net_thrust > dry.net_thrust * 1.1
+
+    def test_afterburner_station(self):
+        """Afterburner exit station should appear."""
+        result = _run_turbojet(afterburner=True, afterburner_temp=2000.0)
+        assert "afterburner_exit" in result.stations
+        assert result.stations["afterburner_exit"].T_total > result.stations["turbine_exit"].T_total
+
+    def test_afterburner_fuel_flow(self):
+        """Afterburner adds extra fuel."""
+        result = _run_turbojet(afterburner=True, afterburner_temp=2000.0)
+        assert result.afterburner is not None
+        assert result.afterburner_fuel_flow > 0
+        assert result.fuel_flow > result.combustor.fuel_flow
+
+    def test_convergent_divergent_nozzle(self):
+        """Con-di nozzle should produce M > 1 exit."""
+        result = _run_turbojet(nozzle_type="convergent_divergent", nozzle_design_mach=1.5)
+        assert result.nozzle is not None
+        assert result.nozzle.mach_exit > 1.0
+
+    def test_afterburner_with_condi(self):
+        """Afterburner + con-di = maximum thrust."""
+        dry_conv = _run_turbojet()
+        wet_condi = _run_turbojet(
+            afterburner=True, afterburner_temp=2000.0,
+            nozzle_type="convergent_divergent", nozzle_design_mach=1.8,
+        )
+        assert wet_condi.net_thrust > dry_conv.net_thrust
+
+    def test_turboshaft_ignores_afterburner(self):
+        """Afterburner flag is ignored for turboshaft."""
+        result = _run_turboshaft(afterburner=True, afterburner_temp=2000.0)
+        assert result.afterburner is None
+        assert result.nozzle is None
+
+    def test_afterburner_sfc_increases(self):
+        """Afterburner increases SFC (more fuel per unit thrust)."""
+        dry = _run_turbojet()
+        wet = _run_turbojet(afterburner=True, afterburner_temp=2000.0)
+        assert wet.specific_fuel_consumption > dry.specific_fuel_consumption

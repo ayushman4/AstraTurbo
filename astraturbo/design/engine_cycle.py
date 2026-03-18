@@ -94,8 +94,19 @@ class CombustorResult:
 
 
 @dataclass
+class AfterburnerResult:
+    """Result from afterburner/reheat model."""
+    T_out: float = 0.0
+    P_out: float = 0.0
+    fuel_air_ratio: float = 0.0
+    fuel_flow: float = 0.0
+    eta_afterburner: float = 0.95
+    dp_fraction: float = 0.06
+
+
+@dataclass
 class NozzleResult:
-    """Result from convergent nozzle model."""
+    """Result from nozzle model (convergent or convergent-divergent)."""
     V_exit: float = 0.0
     P_exit: float = 0.0
     T_exit: float = 0.0
@@ -103,9 +114,83 @@ class NozzleResult:
     is_choked: bool = False
     gross_thrust: float = 0.0
     mach_exit: float = 0.0
+    nozzle_type: str = "convergent"
+    A_throat: float = 0.0
+    area_ratio: float = 1.0
 
 
 # ── Component Physics Functions ──────────────────────
+
+
+def afterburner_model(
+    P_in: float,
+    T_in: float,
+    T_target_out: float,
+    mass_flow_gas: float,
+    eta_afterburner: float = 0.95,
+    dp_fraction: float = 0.06,
+    Q_fuel: float = 43e6,
+    gamma_hot: float = 1.33,
+    cp_hot: float = 1150.0,
+) -> AfterburnerResult:
+    """Afterburner / reheat model — reuses combustor physics with lower eta and higher dp.
+
+    Args:
+        P_in: Inlet total pressure (Pa), from turbine exit.
+        T_in: Inlet total temperature (K), from turbine exit.
+        T_target_out: Target afterburner exit temperature (K).
+        mass_flow_gas: Gas mass flow (air + primary fuel) (kg/s).
+        eta_afterburner: Afterburner combustion efficiency (default 0.95).
+        dp_fraction: Fractional total pressure loss (default 0.06).
+        Q_fuel: Fuel lower heating value (J/kg).
+        gamma_hot: Ratio of specific heats for hot gas.
+        cp_hot: Specific heat for hot gas (J/(kg·K)).
+
+    Returns:
+        AfterburnerResult with outlet conditions and additional fuel flow.
+
+    Raises:
+        ValueError: On invalid inputs or unphysical energy balance.
+    """
+    if P_in <= 0:
+        raise ValueError(f"P_in must be positive, got {P_in}")
+    if T_in <= 0:
+        raise ValueError(f"T_in must be positive, got {T_in}")
+    if T_target_out <= T_in:
+        raise ValueError(
+            f"T_target_out ({T_target_out}) must exceed T_in ({T_in})"
+        )
+    if mass_flow_gas <= 0:
+        raise ValueError(f"mass_flow_gas must be positive, got {mass_flow_gas}")
+    if not (0.0 < dp_fraction < 1.0):
+        raise ValueError(f"dp_fraction must be in (0, 1), got {dp_fraction}")
+    if Q_fuel <= 0:
+        raise ValueError(f"Q_fuel must be positive, got {Q_fuel}")
+
+    # Guard against divide-by-zero in fuel-air ratio formula.
+    # Denominator = Q_fuel * eta - cp_hot * T_target_out
+    # Goes to zero when T_target_out = Q_fuel * eta / cp_hot (stoichiometric limit).
+    denominator = Q_fuel * eta_afterburner - cp_hot * T_target_out
+    if denominator <= 0:
+        raise ValueError(
+            f"Target temperature {T_target_out:.0f} K exceeds stoichiometric "
+            f"limit {Q_fuel * eta_afterburner / cp_hot:.0f} K for this fuel "
+            f"(Q_fuel={Q_fuel:.0e} J/kg, eta={eta_afterburner}). "
+            f"Reduce T_target_out or use a higher-energy fuel."
+        )
+
+    P_out = P_in * (1.0 - dp_fraction)
+    f = cp_hot * (T_target_out - T_in) / denominator
+    f = max(f, 0.0)
+    fuel_flow = f * mass_flow_gas
+    return AfterburnerResult(
+        T_out=T_target_out,
+        P_out=P_out,
+        fuel_air_ratio=f,
+        fuel_flow=fuel_flow,
+        eta_afterburner=eta_afterburner,
+        dp_fraction=dp_fraction,
+    )
 
 
 def inlet_model(
@@ -165,9 +250,36 @@ def combustor_model(
 
     Returns:
         CombustorResult with outlet conditions and fuel flow.
+
+    Raises:
+        ValueError: On invalid inputs or unphysical energy balance.
     """
+    if P_in <= 0:
+        raise ValueError(f"P_in must be positive, got {P_in}")
+    if T_in <= 0:
+        raise ValueError(f"T_in must be positive, got {T_in}")
+    if T_target_out <= T_in:
+        raise ValueError(
+            f"T_target_out ({T_target_out}) must exceed T_in ({T_in})"
+        )
+    if mass_flow_air <= 0:
+        raise ValueError(f"mass_flow_air must be positive, got {mass_flow_air}")
+    if Q_fuel <= 0:
+        raise ValueError(f"Q_fuel must be positive, got {Q_fuel}")
+
+    # Guard against divide-by-zero in fuel-air ratio formula.
+    # Denominator = Q_fuel * eta - cp_hot * T_target_out
+    denominator = Q_fuel * eta_combustor - cp_hot * T_target_out
+    if denominator <= 0:
+        raise ValueError(
+            f"Target temperature {T_target_out:.0f} K exceeds stoichiometric "
+            f"limit {Q_fuel * eta_combustor / cp_hot:.0f} K for this fuel "
+            f"(Q_fuel={Q_fuel:.0e} J/kg, eta={eta_combustor}). "
+            f"Reduce T_target_out or use a higher-energy fuel."
+        )
+
     P_out = P_in * (1.0 - dp_fraction)
-    f = cp_hot * (T_target_out - T_in) / (Q_fuel * eta_combustor - cp_hot * T_target_out)
+    f = cp_hot * (T_target_out - T_in) / denominator
     f = max(f, 0.0)
     fuel_flow = f * mass_flow_air
     return CombustorResult(
@@ -187,8 +299,10 @@ def nozzle_model(
     mass_flow_total: float,
     gamma: float = 1.33,
     cp: float = 1150.0,
+    nozzle_type: str = "convergent",
+    nozzle_design_mach: float = 1.5,
 ) -> NozzleResult:
-    """Convergent nozzle with choke check.
+    """Nozzle model with convergent or convergent-divergent option.
 
     Args:
         P_in: Inlet total pressure (Pa).
@@ -197,6 +311,8 @@ def nozzle_model(
         mass_flow_total: Total mass flow (air + fuel) (kg/s).
         gamma: Ratio of specific heats.
         cp: Specific heat at constant pressure (J/(kg·K)).
+        nozzle_type: "convergent" or "convergent_divergent".
+        nozzle_design_mach: Design exit Mach for con-di nozzle (default 1.5).
 
     Returns:
         NozzleResult with exit conditions and gross thrust.
@@ -204,7 +320,49 @@ def nozzle_model(
     R_gas = cp * (gamma - 1.0) / gamma
     critical_pr = ((gamma + 1.0) / 2.0) ** (gamma / (gamma - 1.0))
     npr = P_in / P_ambient
+    gm1 = gamma - 1.0
 
+    if nozzle_type == "convergent_divergent" and npr > critical_pr:
+        # Con-di nozzle: expand to design Mach (or less if NPR insufficient)
+        M_design = nozzle_design_mach
+        # Check if NPR supports design Mach
+        npr_design = (1.0 + gm1 / 2.0 * M_design ** 2) ** (gamma / gm1)
+        if npr >= npr_design:
+            M_exit = M_design
+        else:
+            # Expand as much as NPR allows
+            M_exit = math.sqrt(2.0 / gm1 * (npr ** (gm1 / gamma) - 1.0))
+            M_exit = max(M_exit, 1.0)
+
+        T_exit = T_in / (1.0 + gm1 / 2.0 * M_exit ** 2)
+        P_exit = P_in / (1.0 + gm1 / 2.0 * M_exit ** 2) ** (gamma / gm1)
+        V_exit = M_exit * math.sqrt(gamma * R_gas * T_exit)
+        rho_exit = P_exit / (R_gas * T_exit)
+        A_exit = mass_flow_total / (rho_exit * V_exit) if rho_exit * V_exit > 0 else 0.0
+        gross_thrust = mass_flow_total * V_exit + (P_exit - P_ambient) * A_exit
+
+        # Throat area
+        T_throat = T_in * 2.0 / (gamma + 1.0)
+        P_throat = P_in / critical_pr
+        rho_throat = P_throat / (R_gas * T_throat)
+        V_throat = math.sqrt(gamma * R_gas * T_throat)
+        A_throat = mass_flow_total / (rho_throat * V_throat) if rho_throat * V_throat > 0 else 0.0
+        area_ratio = A_exit / A_throat if A_throat > 0 else 1.0
+
+        return NozzleResult(
+            V_exit=V_exit,
+            P_exit=P_exit,
+            T_exit=T_exit,
+            A_exit=A_exit,
+            is_choked=True,
+            gross_thrust=gross_thrust,
+            mach_exit=M_exit,
+            nozzle_type=nozzle_type,
+            A_throat=A_throat,
+            area_ratio=area_ratio,
+        )
+
+    # Convergent nozzle (or con-di with insufficient NPR)
     if npr > critical_pr:
         # Choked nozzle: exit at sonic conditions
         T_exit = T_in * 2.0 / (gamma + 1.0)
@@ -218,7 +376,7 @@ def nozzle_model(
     else:
         # Unchoked nozzle: full expansion to P_ambient
         P_exit = P_ambient
-        T_exit = T_in * (P_ambient / P_in) ** ((gamma - 1.0) / gamma)
+        T_exit = T_in * (P_ambient / P_in) ** (gm1 / gamma)
         V_exit = math.sqrt(2.0 * cp * (T_in - T_exit))
         rho_exit = P_exit / (R_gas * T_exit)
         A_exit = mass_flow_total / (rho_exit * V_exit) if rho_exit * V_exit > 0 else 0.0
@@ -235,6 +393,9 @@ def nozzle_model(
         is_choked=is_choked,
         gross_thrust=gross_thrust,
         mach_exit=mach_exit,
+        nozzle_type="convergent",
+        A_throat=A_exit if is_choked else 0.0,
+        area_ratio=1.0,
     )
 
 
@@ -345,6 +506,10 @@ class EngineCycleResult:
     n_spools: int = 1
     spools: list = field(default_factory=list)
 
+    # Afterburner
+    afterburner: AfterburnerResult | None = None
+    afterburner_fuel_flow: float = 0.0     # kg/s additional fuel
+
     def summary(self) -> str:
         """Human-readable engine cycle summary."""
         lines = [
@@ -365,6 +530,9 @@ class EngineCycleResult:
         lines.append(f"  Mass Flow (air): {self.mass_flow:.2f} kg/s")
         lines.append(f"  Fuel Flow:       {self.fuel_flow:.4f} kg/s")
         lines.append(f"  Fuel/Air Ratio:  {self.combustor.fuel_air_ratio:.4f}")
+        if self.afterburner is not None:
+            lines.append(f"  Afterburner:     ON (T_AB={self.afterburner.T_out:.0f} K)")
+            lines.append(f"  AB Fuel Flow:    {self.afterburner_fuel_flow:.4f} kg/s")
         lines.append("")
 
         lines.append("  Efficiencies:")
@@ -433,6 +601,13 @@ def engine_cycle(
     hp_rpm: float | None = None,
     hp_r_hub: float | None = None,
     hp_r_tip: float | None = None,
+    # Afterburner / nozzle parameters
+    afterburner: bool = False,
+    afterburner_temp: float | None = None,
+    afterburner_eta: float = 0.95,
+    afterburner_dp: float = 0.06,
+    nozzle_type: str = "convergent",
+    nozzle_design_mach: float = 1.5,
 ) -> EngineCycleResult:
     """Run a complete gas turbine cycle analysis.
 
@@ -739,7 +914,35 @@ def engine_cycle(
         turbine_work = turb_result.total_work
         stations["turbine_exit"] = StationConditions(P_total=P5, T_total=T5)
 
-    # 8. Nozzle or shaft power
+    # 8. Afterburner (turbojet only, if enabled)
+    ab_result = None
+    ab_fuel_flow = 0.0
+    P_nozzle_in = P5
+    T_nozzle_in = T5
+
+    if afterburner and engine_type == "turbojet":
+        ab_temp = afterburner_temp if afterburner_temp is not None else turbine_inlet_temp + 300.0
+        ab_result = afterburner_model(
+            P_in=P5,
+            T_in=T5,
+            T_target_out=ab_temp,
+            mass_flow_gas=mass_flow_total,
+            eta_afterburner=afterburner_eta,
+            dp_fraction=afterburner_dp,
+            Q_fuel=Q_fuel,
+            gamma_hot=gamma_hot,
+            cp_hot=cp_hot,
+        )
+        ab_fuel_flow = ab_result.fuel_flow
+        mass_flow_total = mass_flow_total + ab_fuel_flow
+        fuel_flow = fuel_flow + ab_fuel_flow
+        P_nozzle_in = ab_result.P_out
+        T_nozzle_in = ab_result.T_out
+        stations["afterburner_exit"] = StationConditions(
+            P_total=ab_result.P_out, T_total=ab_result.T_out
+        )
+
+    # 9. Nozzle or shaft power
     nozzle_res = None
     net_thrust = 0.0
     sfc = 0.0
@@ -748,12 +951,14 @@ def engine_cycle(
 
     if engine_type == "turbojet":
         nozzle_res = nozzle_model(
-            P_in=P5,
-            T_in=T5,
+            P_in=P_nozzle_in,
+            T_in=T_nozzle_in,
             P_ambient=P_amb,
             mass_flow_total=mass_flow_total,
             gamma=gamma_hot,
             cp=cp_hot,
+            nozzle_type=nozzle_type,
+            nozzle_design_mach=nozzle_design_mach,
         )
         stations["nozzle_exit"] = StationConditions(
             P_total=nozzle_res.P_exit,  # static at nozzle exit
@@ -769,7 +974,7 @@ def engine_cycle(
         shaft_work_specific = turbine_work * eta_mech - compressor_work
         shaft_power = shaft_work_specific * mass_flow_total  # Watts
 
-    # 9. Efficiencies
+    # 10. Efficiencies
     Q_in = fuel_flow * Q_fuel
     thermal_eff = 0.0
     propulsive_eff = 0.0
@@ -814,4 +1019,6 @@ def engine_cycle(
         mechanical_efficiency=eta_mech,
         n_spools=n_spools,
         spools=spools_info,
+        afterburner=ab_result,
+        afterburner_fuel_flow=ab_fuel_flow,
     )

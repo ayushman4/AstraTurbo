@@ -19,6 +19,11 @@ one stage of the turbomachinery engineering pipeline.
 │Vel.  │ Fluent   │ Abaqus   │ blockMsh │   SCM    │ Stacking │
 │Tri.  │ CFX      │ Material │ Tecplot  │  O-Grid  │  NURBS   │
 │OffDes│ SU2      │ CFD→FEA  │ VTK/30+  │ MultBlk  │Hub/Shrd │
+│Motor │          │          │          │          │          │
+│Propel│          │          │          │          │          │
+│Pump  │          │          │          │          │          │
+│TbPump│          │          │          │          │          │
+│Cool  │          │          │          │          │          │
 ├──────┴──────────┴──────────┴──────────┴──────────┴──────────┤
 │                     NURBS Engine (geomdl)                    │
 ├─────────────────────────────────────────────────────────────┤
@@ -48,9 +53,10 @@ ai (top layer — calls all modules via tool use)
 ## Modules
 
 ### ai/
-Claude-powered AI assistant with 25 tools. Uses the `anthropic` SDK with tool use —
+Claude-powered AI assistant with 30 tools. Uses the `anthropic` SDK with tool use —
 Claude calls AstraTurbo functions directly (meanline compressor/turbine, centrifugal,
-engine cycle, turbine off-design, turbine map, profile, mesh, CFD, FEA, y+, materials,
+engine cycle, turbine off-design, turbine map, electric motor, propeller, pump,
+turbopump, cooling, profile, mesh, CFD, FEA, y+, materials,
 formats, file inspect, reports).
 Requires `ANTHROPIC_API_KEY`.
 Accessible via: GUI (AI Assistant tab), CLI (`astraturbo ai`), Python (`create_assistant()`).
@@ -59,8 +65,10 @@ Accessible via: GUI (AI Assistant tab), CLI (`astraturbo ai`), Python (`create_a
 Velocity triangle calculations, meanline stage-by-stage analysis (axial compressor,
 centrifugal compressor, and axial turbine), engine cycle solver (single-spool and
 twin-spool turbojet/turboshaft: inlet → compressor → combustor → turbine → nozzle),
-off-design solver, compressor map generation, turbine off-design solver, and turbine
-map generation.
+off-design solver, compressor map generation, turbine off-design solver, turbine
+map generation, electric motor sizing, propeller design (BEM theory), rocket pump
+design, integrated turbopump analysis, and cooling system analysis (film/convective/
+transpiration).
 Input: pressure ratio/expansion ratio, mass flow, RPM, radii, inlet temperature.
 Output: blade angles, loading coefficients, De Haller ratios, Zweifel loading (turbine),
 Soderberg losses (turbine), speed lines, surge/choke margin, impeller/diffuser geometry (centrifugal).

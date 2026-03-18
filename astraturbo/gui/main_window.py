@@ -143,6 +143,27 @@ class MainWindow(QMainWindow):
         self._add_action(compute_menu, "&Centrifugal Compressor...", self._run_centrifugal)
         self._add_action(compute_menu, "&Turbine Meanline...", self._run_turbine_meanline)
         self._add_action(compute_menu, "&Engine Cycle...", self._run_engine_cycle)
+
+        em_action = QAction("Electric &Motor...", self)
+        em_action.triggered.connect(self._run_electric_motor)
+        compute_menu.addAction(em_action)
+
+        prop_action = QAction("&Propeller / Rotor...", self)
+        prop_action.triggered.connect(self._run_propeller)
+        compute_menu.addAction(prop_action)
+
+        pump_action = QAction("Centrifugal &Pump...", self)
+        pump_action.triggered.connect(self._run_pump)
+        compute_menu.addAction(pump_action)
+
+        tp_action = QAction("Turbo&pump Assembly...", self)
+        tp_action.triggered.connect(self._run_turbopump)
+        compute_menu.addAction(tp_action)
+
+        cool_action = QAction("Blade &Cooling...", self)
+        cool_action.triggered.connect(self._run_cooling)
+        compute_menu.addAction(cool_action)
+
         compute_menu.addSeparator()
         self._add_action(compute_menu, "Compute &Blade Geometry", self._compute_blade)
         self._add_action(compute_menu, "Generate Blade &Array (Full Annulus)", self._generate_blade_array)
@@ -1185,6 +1206,28 @@ class MainWindow(QMainWindow):
             if not ok:
                 return
 
+        # Afterburner option
+        from PySide6.QtWidgets import QCheckBox
+        use_ab = False
+        ab_temp = None
+        if engine_type == "turbojet":
+            dlg2 = QDialog(self)
+            dlg2.setWindowTitle("Afterburner")
+            layout2 = QVBoxLayout(dlg2)
+            ab_check = QCheckBox("Enable Afterburner")
+            layout2.addWidget(ab_check)
+            buttons2 = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            buttons2.accepted.connect(dlg2.accept)
+            buttons2.rejected.connect(dlg2.reject)
+            layout2.addWidget(buttons2)
+            if dlg2.exec() == QDialog.Accepted:
+                use_ab = ab_check.isChecked()
+                if use_ab:
+                    ab_temp, ok = QInputDialog.getDouble(self, "Afterburner", "AB Exit Temperature (K):", 2000, 1000, 2500, 0)
+                    if not ok:
+                        ab_temp = None
+                        use_ab = False
+
         try:
             from ..design.engine_cycle import engine_cycle
             result = engine_cycle(
@@ -1202,6 +1245,8 @@ class MainWindow(QMainWindow):
                 hp_rpm=hp_rpm_val,
                 hp_r_hub=hp_r_hub_val,
                 hp_r_tip=hp_r_tip_val,
+                afterburner=use_ab,
+                afterburner_temp=ab_temp,
             )
 
             QMessageBox.information(self, "Engine Cycle", result.summary())
@@ -1233,6 +1278,110 @@ class MainWindow(QMainWindow):
                     self.statusBar().showMessage(f"Report saved: {path}")
         except Exception as e:
             QMessageBox.warning(self, "Engine Cycle Error", f"{e}\n\n{traceback.format_exc()}")
+
+    def _run_electric_motor(self) -> None:
+        """Electric motor sizing dialog."""
+        from PySide6.QtWidgets import QInputDialog
+        power, ok = QInputDialog.getDouble(self, "Electric Motor", "Shaft Power (W):", 50000, 1, 1e7, 0)
+        if not ok:
+            return
+        rpm, ok = QInputDialog.getDouble(self, "Electric Motor", "RPM:", 8000, 1, 200000, 0)
+        if not ok:
+            return
+        voltage, ok = QInputDialog.getDouble(self, "Electric Motor", "Voltage (V):", 400, 1, 10000, 0)
+        if not ok:
+            return
+        try:
+            from astraturbo.design.electric_motor import electric_motor
+            result = electric_motor(shaft_power=power, rpm=rpm, voltage=voltage)
+            QMessageBox.information(self, "Electric Motor", result.summary())
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Motor sizing failed:\n{e}")
+
+    def _run_propeller(self) -> None:
+        """Propeller/rotor design dialog."""
+        from PySide6.QtWidgets import QInputDialog
+        thrust, ok = QInputDialog.getDouble(self, "Propeller", "Thrust (N):", 50, 0.1, 100000, 1)
+        if not ok:
+            return
+        n_blades, ok = QInputDialog.getInt(self, "Propeller", "Number of Blades:", 3, 1, 12)
+        if not ok:
+            return
+        diameter, ok = QInputDialog.getDouble(self, "Propeller", "Diameter (m):", 0.5, 0.01, 10, 3)
+        if not ok:
+            return
+        rpm, ok = QInputDialog.getDouble(self, "Propeller", "RPM:", 8000, 1, 200000, 0)
+        if not ok:
+            return
+        try:
+            from astraturbo.design.propeller import propeller_design
+            result = propeller_design(thrust_required=thrust, n_blades=n_blades, diameter=diameter, rpm=rpm)
+            QMessageBox.information(self, "Propeller", result.summary())
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Propeller design failed:\n{e}")
+
+    def _run_pump(self) -> None:
+        """Centrifugal pump design dialog."""
+        from PySide6.QtWidgets import QInputDialog
+        head, ok = QInputDialog.getDouble(self, "Pump", "Head (m):", 100, 0.1, 10000, 1)
+        if not ok:
+            return
+        flow, ok = QInputDialog.getDouble(self, "Pump", "Flow Rate (m\u00b3/s):", 0.05, 0.0001, 100, 4)
+        if not ok:
+            return
+        rpm, ok = QInputDialog.getDouble(self, "Pump", "RPM:", 5000, 1, 200000, 0)
+        if not ok:
+            return
+        try:
+            from astraturbo.design.pump import centrifugal_pump
+            result = centrifugal_pump(head=head, flow_rate=flow, rpm=rpm)
+            QMessageBox.information(self, "Pump", result.summary())
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Pump design failed:\n{e}")
+
+    def _run_turbopump(self) -> None:
+        """Turbopump assembly dialog."""
+        from PySide6.QtWidgets import QInputDialog
+        head, ok = QInputDialog.getDouble(self, "Turbopump", "Pump Head (m):", 500, 1, 50000, 0)
+        if not ok:
+            return
+        flow, ok = QInputDialog.getDouble(self, "Turbopump", "Pump Flow (m\u00b3/s):", 0.1, 0.001, 10, 3)
+        if not ok:
+            return
+        t_temp, ok = QInputDialog.getDouble(self, "Turbopump", "Turbine Inlet Temp (K):", 900, 300, 3000, 0)
+        if not ok:
+            return
+        t_pres, ok = QInputDialog.getDouble(self, "Turbopump", "Turbine Inlet Pressure (Pa):", 5000000, 100000, 5e8, 0)
+        if not ok:
+            return
+        rpm, ok = QInputDialog.getDouble(self, "Turbopump", "RPM:", 30000, 100, 200000, 0)
+        if not ok:
+            return
+        try:
+            from astraturbo.design.turbopump import turbopump
+            result = turbopump(
+                pump_head=head, pump_flow_rate=flow, fluid_density=1141.0,
+                turbine_inlet_temp=t_temp, turbine_inlet_pressure=t_pres, rpm=rpm,
+            )
+            QMessageBox.information(self, "Turbopump", result.summary())
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Turbopump design failed:\n{e}")
+
+    def _run_cooling(self) -> None:
+        """Turbine blade cooling dialog."""
+        from PySide6.QtWidgets import QInputDialog
+        t_gas, ok = QInputDialog.getDouble(self, "Cooling", "Gas Temperature (K):", 1700, 500, 3000, 0)
+        if not ok:
+            return
+        t_cool, ok = QInputDialog.getDouble(self, "Cooling", "Coolant Temperature (K):", 600, 200, 1500, 0)
+        if not ok:
+            return
+        try:
+            from astraturbo.design.cooling import cooling_flow
+            result = cooling_flow(T_gas=t_gas, T_coolant=t_cool)
+            QMessageBox.information(self, "Cooling", result.summary())
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Cooling analysis failed:\n{e}")
 
     # ----------------------------------------------------------------
     # Undo / Redo

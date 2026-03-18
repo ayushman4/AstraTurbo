@@ -513,6 +513,17 @@ def _engine_cycle_section(result) -> str:
                  f"(mismatch: {balance_pct:.1f}%)")
     lines.append("</div>")
 
+    # Afterburner info
+    ab = getattr(result, 'afterburner', None)
+    if ab is not None:
+        lines.append("<h3>Afterburner / Reheat</h3>")
+        lines.append("<div class='summary-box warning'>")
+        lines.append(f"<strong>AB Exit Temp:</strong> {ab.T_out:.0f} K &nbsp;&nbsp;")
+        lines.append(f"<strong>AB Fuel Flow:</strong> {ab.fuel_flow:.4f} kg/s &nbsp;&nbsp;")
+        lines.append(f"<strong>&eta;<sub>AB</sub>:</strong> {ab.eta_afterburner:.4f} &nbsp;&nbsp;")
+        lines.append(f"<strong>&Delta;P/P:</strong> {ab.dp_fraction:.4f}")
+        lines.append("</div>")
+
     # Per-spool breakdown (twin-spool only)
     n_spools = getattr(result, "n_spools", 1)
     spools = getattr(result, "spools", [])
@@ -534,6 +545,143 @@ def _engine_cycle_section(result) -> str:
     return "\n".join(lines)
 
 
+def _electric_motor_section(result) -> str:
+    """Generate electric motor section."""
+    lines = ["<h2>Electric Motor Sizing</h2>"]
+    lines.append("<div class='summary-box'>")
+    lines.append(f"<strong>Type:</strong> {result.motor_type} &nbsp;&nbsp;")
+    lines.append(f"<strong>Power:</strong> {result.shaft_power/1000:.1f} kW &nbsp;&nbsp;")
+    lines.append(f"<strong>RPM:</strong> {result.rpm:.0f} &nbsp;&nbsp;")
+    lines.append(f"<strong>Efficiency:</strong> {result.efficiency:.4f}")
+    lines.append("</div>")
+    lines.append("<table>")
+    lines.append("<tr><th>Parameter</th><th>Value</th></tr>")
+    for label, val in [
+        ("Torque", f"{result.torque:.3f} N&middot;m"),
+        ("Voltage", f"{result.voltage:.1f} V"),
+        ("Current", f"{result.current:.1f} A"),
+        ("Weight", f"{result.weight_kg:.2f} kg"),
+        ("Power Density", f"{result.power_density:.1f} kW/kg"),
+        ("Kv", f"{result.motor_constant_kv:.1f} RPM/V"),
+        ("Thermal Margin", f"{result.thermal_margin:.2f}"),
+    ]:
+        lines.append(f"<tr><td style='text-align:left'>{label}</td><td>{val}</td></tr>")
+    lines.append("</table>")
+    return "\n".join(lines)
+
+
+def _propeller_section(result) -> str:
+    """Generate propeller/rotor section."""
+    lines = ["<h2>Propeller / Rotor Design</h2>"]
+    lines.append("<div class='summary-box'>")
+    lines.append(f"<strong>Thrust:</strong> {result.thrust:.1f} N &nbsp;&nbsp;")
+    lines.append(f"<strong>Power:</strong> {result.power/1000:.1f} kW &nbsp;&nbsp;")
+    lines.append(f"<strong>Diameter:</strong> {result.diameter:.3f} m &nbsp;&nbsp;")
+    lines.append(f"<strong>Blades:</strong> {result.n_blades}")
+    lines.append("</div>")
+    lines.append("<table>")
+    lines.append("<tr><th>Parameter</th><th>Value</th></tr>")
+    for label, val in [
+        ("RPM", f"{result.rpm:.0f}"),
+        ("Advance Ratio", f"{result.advance_ratio:.4f}"),
+        ("CT", f"{result.CT:.6f}"),
+        ("CP", f"{result.CP:.6f}"),
+        ("Disk Loading", f"{result.disk_loading:.1f} N/m&sup2;"),
+        ("Tip Speed", f"{result.tip_speed:.1f} m/s"),
+        ("Tip Mach", f"{result.tip_mach:.3f}"),
+        ("Blade Angle @75%", f"{result.blade_angle_75:.1f}&deg;"),
+        ("Solidity", f"{result.solidity:.4f}"),
+        ("Figure of Merit", f"{result.figure_of_merit:.4f}"),
+        ("Propulsive Eff.", f"{result.efficiency:.4f}"),
+    ]:
+        lines.append(f"<tr><td style='text-align:left'>{label}</td><td>{val}</td></tr>")
+    lines.append("</table>")
+    return "\n".join(lines)
+
+
+def _pump_section(result) -> str:
+    """Generate pump section."""
+    lines = ["<h2>Centrifugal Pump Design</h2>"]
+    lines.append("<div class='summary-box'>")
+    lines.append(f"<strong>Fluid:</strong> {result.fluid_name} (&rho;={result.fluid_density:.0f} kg/m&sup3;) &nbsp;&nbsp;")
+    lines.append(f"<strong>Head:</strong> {result.head:.1f} m &nbsp;&nbsp;")
+    lines.append(f"<strong>Power:</strong> {result.power_kW:.2f} kW &nbsp;&nbsp;")
+    lines.append(f"<strong>Efficiency:</strong> {result.efficiency:.4f}")
+    lines.append("</div>")
+    lines.append("<table>")
+    lines.append("<tr><th>Parameter</th><th>Value</th></tr>")
+    for label, val in [
+        ("Flow Rate", f"{result.flow_rate:.4f} m&sup3;/s"),
+        ("RPM", f"{result.rpm:.0f}"),
+        ("Specific Speed", f"{result.specific_speed:.2f}"),
+        ("Impeller Diameter", f"{result.impeller_diameter*1000:.1f} mm"),
+        ("Tip Speed", f"{result.tip_speed:.0f} m/s"),
+        ("NPSH Required", f"{result.npsh_required:.2f} m"),
+        ("Number of Blades", f"{result.n_blades}"),
+    ]:
+        lines.append(f"<tr><td style='text-align:left'>{label}</td><td>{val}</td></tr>")
+    lines.append("</table>")
+    return "\n".join(lines)
+
+
+def _turbopump_section(result) -> str:
+    """Generate turbopump section."""
+    lines = ["<h2>Turbopump Assembly</h2>"]
+    lines.append("<div class='summary-box'>")
+    lines.append(f"<strong>Cycle:</strong> {result.cycle_type.replace('_', ' ').title()} &nbsp;&nbsp;")
+    lines.append(f"<strong>RPM:</strong> {result.shaft_rpm:.0f} &nbsp;&nbsp;")
+    lines.append(f"<strong>Power Margin:</strong> {result.power_margin*100:.1f}%")
+    lines.append("</div>")
+    lines.append("<table>")
+    lines.append("<tr><th>Parameter</th><th>Value</th></tr>")
+    for label, val in [
+        ("Pump Power", f"{result.pump_power/1000:.2f} kW"),
+        ("Turbine Power", f"{result.turbine_power/1000:.2f} kW"),
+        ("Shaft Power", f"{result.shaft_power/1000:.2f} kW"),
+        ("Mechanical Eff.", f"{result.mechanical_efficiency:.4f}"),
+        ("Overall Eff.", f"{result.overall_efficiency:.4f}"),
+    ]:
+        lines.append(f"<tr><td style='text-align:left'>{label}</td><td>{val}</td></tr>")
+    lines.append("</table>")
+    if result.pump:
+        lines.append("<h3>Pump</h3><table>")
+        lines.append("<tr><th>Parameter</th><th>Value</th></tr>")
+        p = result.pump
+        for label, val in [
+            ("Fluid", f"{p.fluid_name} (&rho;={p.fluid_density:.0f})"),
+            ("Head", f"{p.head:.1f} m"),
+            ("Efficiency", f"{p.efficiency:.4f}"),
+            ("Impeller Dia.", f"{p.impeller_diameter*1000:.1f} mm"),
+        ]:
+            lines.append(f"<tr><td style='text-align:left'>{label}</td><td>{val}</td></tr>")
+        lines.append("</table>")
+    return "\n".join(lines)
+
+
+def _cooling_section(result) -> str:
+    """Generate blade cooling section."""
+    lines = ["<h2>Turbine Blade Cooling</h2>"]
+    lines.append("<div class='summary-box'>")
+    lines.append(f"<strong>Type:</strong> {result.cooling_type} (&phi;={result.phi:.2f}) &nbsp;&nbsp;")
+    lines.append(f"<strong>T<sub>gas</sub>:</strong> {result.T_gas:.0f} K &nbsp;&nbsp;")
+    lines.append(f"<strong>T<sub>coolant</sub>:</strong> {result.T_coolant:.0f} K &nbsp;&nbsp;")
+    lines.append(f"<strong>Coolant Fraction:</strong> {result.total_coolant_fraction:.4f}")
+    lines.append("</div>")
+    lines.append("<table>")
+    lines.append("<tr><th>Row</th><th>&epsilon;</th><th>mc/mg</th><th>mc (kg/s)</th><th>T<sub>blade</sub> (K)</th></tr>")
+    for r in result.rows:
+        lines.append(
+            f"<tr><td>{r.row_index}</td>"
+            f"<td>{r.cooling_effectiveness:.4f}</td>"
+            f"<td>{r.coolant_fraction:.4f}</td>"
+            f"<td>{r.coolant_mass_flow:.4f}</td>"
+            f"<td>{r.T_blade:.1f}</td></tr>"
+        )
+    lines.append("</table>")
+    lines.append(f"<p><strong>Total coolant flow:</strong> {result.total_coolant_flow:.4f} kg/s</p>")
+    return "\n".join(lines)
+
+
 def generate_report(
     config: ReportConfig | None = None,
     meanline_result=None,
@@ -547,6 +695,11 @@ def generate_report(
     material_temperature: float | None = None,
     blade_params: list[dict] | None = None,
     engine_cycle_result=None,
+    electric_motor_result=None,
+    propeller_result=None,
+    pump_result=None,
+    turbopump_result=None,
+    cooling_result=None,
 ) -> str:
     """Generate an HTML design report.
 
@@ -613,6 +766,21 @@ def generate_report(
                 f"<td>{p['stator_camber_deg']:.1f}</td></tr>"
             )
         parts.append("</table>")
+
+    if electric_motor_result is not None:
+        parts.append(_electric_motor_section(electric_motor_result))
+
+    if propeller_result is not None:
+        parts.append(_propeller_section(propeller_result))
+
+    if pump_result is not None:
+        parts.append(_pump_section(pump_result))
+
+    if turbopump_result is not None:
+        parts.append(_turbopump_section(turbopump_result))
+
+    if cooling_result is not None:
+        parts.append(_cooling_section(cooling_result))
 
     parts.append(_footer())
 

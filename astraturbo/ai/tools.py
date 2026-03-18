@@ -1067,6 +1067,23 @@ _register(
                 "type": "number",
                 "description": "HP spool RPM (twin-spool only; default rpm*1.3)",
             },
+            "afterburner": {
+                "type": "boolean",
+                "description": "Enable afterburner/reheat (turbojet only, default false)",
+            },
+            "afterburner_temp": {
+                "type": "number",
+                "description": "Afterburner exit temperature in K (default TIT+300)",
+            },
+            "nozzle_type": {
+                "type": "string",
+                "enum": ["convergent", "convergent_divergent"],
+                "description": "Nozzle type (default convergent)",
+            },
+            "nozzle_design_mach": {
+                "type": "number",
+                "description": "Design exit Mach for con-di nozzle (default 1.5)",
+            },
         },
         "required": ["overall_pressure_ratio", "turbine_inlet_temp", "mass_flow", "rpm", "r_hub", "r_tip"],
     },
@@ -1182,6 +1199,215 @@ _register(
 
 
 # ──────────────────────────────────────────────────────
+# 26. Electric motor sizing
+# ──────────────────────────────────────────────────────
+
+_register(
+    "electric_motor",
+    "Size an electric motor (BLDC or PMSM) for eVTOL/drone propulsion. "
+    "Computes torque, Kv, weight, efficiency, and thermal margin from "
+    "shaft power, RPM, and voltage requirements.",
+    {
+        "type": "object",
+        "properties": {
+            "shaft_power": {
+                "type": "number",
+                "description": "Required shaft power in Watts",
+            },
+            "rpm": {
+                "type": "number",
+                "description": "Motor speed in RPM",
+            },
+            "voltage": {
+                "type": "number",
+                "description": "Supply voltage in Volts",
+            },
+            "motor_type": {
+                "type": "string",
+                "enum": ["BLDC", "PMSM"],
+                "description": "Motor type (default BLDC)",
+            },
+            "eta_peak": {
+                "type": "number",
+                "description": "Peak efficiency (default 0.92)",
+            },
+            "load_fraction": {
+                "type": "number",
+                "description": "Operating load fraction 0-1 (default 1.0)",
+            },
+        },
+        "required": ["shaft_power", "rpm", "voltage"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
+# 27. Propeller design
+# ──────────────────────────────────────────────────────
+
+_register(
+    "propeller_design",
+    "Design a propeller or rotor for drone/eVTOL applications. "
+    "Uses actuator disk momentum theory to compute thrust, power, "
+    "efficiency, figure of merit (hover), and blade geometry.",
+    {
+        "type": "object",
+        "properties": {
+            "thrust_required": {
+                "type": "number",
+                "description": "Required thrust in Newtons",
+            },
+            "n_blades": {
+                "type": "integer",
+                "description": "Number of blades",
+            },
+            "diameter": {
+                "type": "number",
+                "description": "Propeller diameter in meters",
+            },
+            "rpm": {
+                "type": "number",
+                "description": "Rotational speed in RPM",
+            },
+            "V_flight": {
+                "type": "number",
+                "description": "Forward flight speed in m/s (0 = hover, default 0)",
+            },
+            "altitude": {
+                "type": "number",
+                "description": "Altitude in meters (default 0)",
+            },
+        },
+        "required": ["thrust_required", "n_blades", "diameter", "rpm"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
+# 28. Centrifugal pump
+# ──────────────────────────────────────────────────────
+
+_register(
+    "centrifugal_pump",
+    "Design a centrifugal pump for rocket turbopump or industrial use. "
+    "Computes efficiency, impeller sizing, NPSH, and shaft power from "
+    "head, flow rate, and RPM. Supports LOX, RP-1, LH2, and water.",
+    {
+        "type": "object",
+        "properties": {
+            "head": {
+                "type": "number",
+                "description": "Required pump head in meters",
+            },
+            "flow_rate": {
+                "type": "number",
+                "description": "Volume flow rate in m³/s",
+            },
+            "rpm": {
+                "type": "number",
+                "description": "Shaft speed in RPM",
+            },
+            "fluid_name": {
+                "type": "string",
+                "description": "Fluid name: LOX, RP-1, LH2, water (default water)",
+            },
+        },
+        "required": ["head", "flow_rate", "rpm"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
+# 29. Turbopump assembly
+# ──────────────────────────────────────────────────────
+
+_register(
+    "turbopump",
+    "Design a complete turbopump assembly coupling a centrifugal pump "
+    "with an axial turbine for rocket engine propellant feed. "
+    "Computes shaft power balance, pump and turbine sizing.",
+    {
+        "type": "object",
+        "properties": {
+            "pump_head": {
+                "type": "number",
+                "description": "Required pump head in meters",
+            },
+            "pump_flow_rate": {
+                "type": "number",
+                "description": "Pump volume flow rate in m³/s",
+            },
+            "fluid_name": {
+                "type": "string",
+                "description": "Pump fluid: LOX, RP-1, LH2, water (default LOX)",
+            },
+            "turbine_inlet_temp": {
+                "type": "number",
+                "description": "Turbine inlet temperature in K",
+            },
+            "turbine_inlet_pressure": {
+                "type": "number",
+                "description": "Turbine inlet pressure in Pa",
+            },
+            "rpm": {
+                "type": "number",
+                "description": "Common shaft RPM (default 30000)",
+            },
+            "cycle_type": {
+                "type": "string",
+                "enum": ["gas_generator", "staged_combustion", "expander"],
+                "description": "Turbopump cycle type (default gas_generator)",
+            },
+        },
+        "required": ["pump_head", "pump_flow_rate", "turbine_inlet_temp", "turbine_inlet_pressure"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
+# 30. Cooling flow
+# ──────────────────────────────────────────────────────
+
+_register(
+    "cooling_flow",
+    "Estimate turbine blade cooling air requirements using the "
+    "Holland-Thake model. Supports convection, film, and transpiration "
+    "cooling. Returns per-row and total coolant mass flow.",
+    {
+        "type": "object",
+        "properties": {
+            "T_gas": {
+                "type": "number",
+                "description": "Hot gas temperature at turbine entry in K",
+            },
+            "T_coolant": {
+                "type": "number",
+                "description": "Coolant air temperature in K",
+            },
+            "T_blade_max": {
+                "type": "number",
+                "description": "Maximum blade metal temperature in K (default 1300)",
+            },
+            "cooling_type": {
+                "type": "string",
+                "enum": ["convection", "film", "transpiration"],
+                "description": "Cooling method (default film)",
+            },
+            "n_cooled_rows": {
+                "type": "integer",
+                "description": "Number of cooled blade rows (default 2)",
+            },
+            "mass_flow_gas": {
+                "type": "number",
+                "description": "Gas mass flow in kg/s (default 20)",
+            },
+        },
+        "required": ["T_gas", "T_coolant"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
 # Tool execution dispatcher
 # ──────────────────────────────────────────────────────
 
@@ -1238,6 +1464,16 @@ def execute_tool(name: str, inputs: dict) -> str:
             return _exec_turbine_off_design(inputs)
         elif name == "generate_turbine_map":
             return _exec_turbine_map(inputs)
+        elif name == "electric_motor":
+            return _exec_electric_motor(inputs)
+        elif name == "propeller_design":
+            return _exec_propeller_design(inputs)
+        elif name == "centrifugal_pump":
+            return _exec_centrifugal_pump(inputs)
+        elif name == "turbopump":
+            return _exec_turbopump(inputs)
+        elif name == "cooling_flow":
+            return _exec_cooling_flow(inputs)
         else:
             return f"Unknown tool: {name}"
     except Exception as e:
@@ -2138,6 +2374,14 @@ def _exec_engine_cycle(inputs: dict) -> str:
         kwargs["hp_pressure_ratio"] = float(inputs["hp_pressure_ratio"])
     if "hp_rpm" in inputs:
         kwargs["hp_rpm"] = float(inputs["hp_rpm"])
+    if "afterburner" in inputs:
+        kwargs["afterburner"] = bool(inputs["afterburner"])
+    if "afterburner_temp" in inputs:
+        kwargs["afterburner_temp"] = float(inputs["afterburner_temp"])
+    if "nozzle_type" in inputs:
+        kwargs["nozzle_type"] = inputs["nozzle_type"]
+    if "nozzle_design_mach" in inputs:
+        kwargs["nozzle_design_mach"] = float(inputs["nozzle_design_mach"])
 
     result = engine_cycle(**kwargs)
     return result.summary()
@@ -2244,3 +2488,90 @@ def _exec_turbine_map(inputs: dict) -> str:
                 output += f"\n\nChoke margin at design speed: {cm:.4f} ({cm*100:.1f}%)"
 
     return output
+
+
+def _exec_electric_motor(inputs: dict) -> str:
+    from astraturbo.design.electric_motor import electric_motor
+    kwargs = {
+        "shaft_power": float(inputs["shaft_power"]),
+        "rpm": float(inputs["rpm"]),
+        "voltage": float(inputs["voltage"]),
+    }
+    if "motor_type" in inputs:
+        kwargs["motor_type"] = inputs["motor_type"]
+    if "eta_peak" in inputs:
+        kwargs["eta_peak"] = float(inputs["eta_peak"])
+    if "load_fraction" in inputs:
+        kwargs["load_fraction"] = float(inputs["load_fraction"])
+    result = electric_motor(**kwargs)
+    return result.summary()
+
+
+def _exec_propeller_design(inputs: dict) -> str:
+    from astraturbo.design.propeller import propeller_design
+    kwargs = {
+        "thrust_required": float(inputs["thrust_required"]),
+        "n_blades": int(inputs["n_blades"]),
+        "diameter": float(inputs["diameter"]),
+        "rpm": float(inputs["rpm"]),
+    }
+    if "V_flight" in inputs:
+        kwargs["V_flight"] = float(inputs["V_flight"])
+    if "altitude" in inputs:
+        kwargs["altitude"] = float(inputs["altitude"])
+    result = propeller_design(**kwargs)
+    return result.summary()
+
+
+def _exec_centrifugal_pump(inputs: dict) -> str:
+    from astraturbo.design.pump import centrifugal_pump, FLUIDS
+    kwargs = {
+        "head": float(inputs["head"]),
+        "flow_rate": float(inputs["flow_rate"]),
+        "rpm": float(inputs["rpm"]),
+    }
+    if "fluid_name" in inputs:
+        fname = inputs["fluid_name"]
+        kwargs["fluid_name"] = fname
+        if fname in FLUIDS:
+            kwargs["fluid_density"] = FLUIDS[fname]
+    result = centrifugal_pump(**kwargs)
+    return result.summary()
+
+
+def _exec_turbopump(inputs: dict) -> str:
+    from astraturbo.design.turbopump import turbopump
+    from astraturbo.design.pump import FLUIDS
+    kwargs = {
+        "pump_head": float(inputs["pump_head"]),
+        "pump_flow_rate": float(inputs["pump_flow_rate"]),
+        "turbine_inlet_temp": float(inputs["turbine_inlet_temp"]),
+        "turbine_inlet_pressure": float(inputs["turbine_inlet_pressure"]),
+    }
+    fname = inputs.get("fluid_name", "LOX")
+    kwargs["fluid_name"] = fname
+    kwargs["fluid_density"] = FLUIDS.get(fname, 1141.0)
+    if "rpm" in inputs:
+        kwargs["rpm"] = float(inputs["rpm"])
+    if "cycle_type" in inputs:
+        kwargs["cycle_type"] = inputs["cycle_type"]
+    result = turbopump(**kwargs)
+    return result.summary()
+
+
+def _exec_cooling_flow(inputs: dict) -> str:
+    from astraturbo.design.cooling import cooling_flow
+    kwargs = {
+        "T_gas": float(inputs["T_gas"]),
+        "T_coolant": float(inputs["T_coolant"]),
+    }
+    if "T_blade_max" in inputs:
+        kwargs["T_blade_max"] = float(inputs["T_blade_max"])
+    if "cooling_type" in inputs:
+        kwargs["cooling_type"] = inputs["cooling_type"]
+    if "n_cooled_rows" in inputs:
+        kwargs["n_cooled_rows"] = int(inputs["n_cooled_rows"])
+    if "mass_flow_gas" in inputs:
+        kwargs["mass_flow_gas"] = float(inputs["mass_flow_gas"])
+    result = cooling_flow(**kwargs)
+    return result.summary()

@@ -343,6 +343,62 @@ def main():
     ec_parser.add_argument("--hp-r-hub", type=float, default=None, help="HP blade hub radius (twin-spool; default r_hub*0.8)")
     ec_parser.add_argument("--hp-r-tip", type=float, default=None, help="HP blade tip radius (twin-spool; default r_tip*0.8)")
     ec_parser.add_argument("--report", type=str, default=None, help="Generate HTML report to this file")
+    ec_parser.add_argument("--afterburner", action="store_true", help="Enable afterburner/reheat")
+    ec_parser.add_argument("--afterburner-temp", type=float, default=None, help="Afterburner exit temperature (K)")
+    ec_parser.add_argument("--nozzle-type", choices=["convergent", "convergent_divergent"],
+                           default="convergent", help="Nozzle type")
+    ec_parser.add_argument("--nozzle-mach", type=float, default=1.5, help="Design exit Mach for con-di nozzle")
+
+    # --- electric-motor ---
+    em_parser = subparsers.add_parser("electric-motor", help="Electric motor sizing for eVTOL/drone")
+    em_parser.add_argument("--power", type=float, required=True, help="Shaft power (W)")
+    em_parser.add_argument("--rpm", type=float, required=True, help="Motor RPM")
+    em_parser.add_argument("--voltage", type=float, required=True, help="Supply voltage (V)")
+    em_parser.add_argument("--motor-type", choices=["BLDC", "PMSM"], default="BLDC", help="Motor type")
+    em_parser.add_argument("--eta-peak", type=float, default=0.92, help="Peak efficiency")
+    em_parser.add_argument("--load-fraction", type=float, default=1.0, help="Load fraction (0-1)")
+    em_parser.add_argument("--report", type=str, default=None, help="Generate HTML report")
+
+    # --- propeller ---
+    prop_parser = subparsers.add_parser("propeller", help="Propeller/rotor design for drones/eVTOL")
+    prop_parser.add_argument("--thrust", type=float, required=True, help="Required thrust (N)")
+    prop_parser.add_argument("--n-blades", type=int, required=True, help="Number of blades")
+    prop_parser.add_argument("--diameter", type=float, required=True, help="Propeller diameter (m)")
+    prop_parser.add_argument("--rpm", type=float, required=True, help="RPM")
+    prop_parser.add_argument("--v-flight", type=float, default=0.0, help="Flight speed (m/s, 0=hover)")
+    prop_parser.add_argument("--altitude", type=float, default=0.0, help="Altitude (m)")
+    prop_parser.add_argument("--report", type=str, default=None, help="Generate HTML report")
+
+    # --- pump ---
+    pump_parser = subparsers.add_parser("pump", help="Centrifugal pump design for rocket/industrial")
+    pump_parser.add_argument("--head", type=float, required=True, help="Pump head (m)")
+    pump_parser.add_argument("--flow-rate", type=float, required=True, help="Volume flow rate (m³/s)")
+    pump_parser.add_argument("--rpm", type=float, required=True, help="Shaft speed (RPM)")
+    pump_parser.add_argument("--fluid", type=str, default="water", help="Fluid name (LOX, RP-1, LH2, water)")
+    pump_parser.add_argument("--report", type=str, default=None, help="Generate HTML report")
+
+    # --- turbopump ---
+    tp_parser = subparsers.add_parser("turbopump", help="Turbopump assembly for rocket engines")
+    tp_parser.add_argument("--pump-head", type=float, required=True, help="Pump head (m)")
+    tp_parser.add_argument("--pump-flow", type=float, required=True, help="Pump volume flow rate (m³/s)")
+    tp_parser.add_argument("--fluid", type=str, default="LOX", help="Fluid name")
+    tp_parser.add_argument("--turbine-temp", type=float, required=True, help="Turbine inlet temperature (K)")
+    tp_parser.add_argument("--turbine-pressure", type=float, required=True, help="Turbine inlet pressure (Pa)")
+    tp_parser.add_argument("--rpm", type=float, default=30000, help="Shaft RPM")
+    tp_parser.add_argument("--cycle-type", choices=["gas_generator", "staged_combustion", "expander"],
+                           default="gas_generator", help="Cycle type")
+    tp_parser.add_argument("--report", type=str, default=None, help="Generate HTML report")
+
+    # --- cooling ---
+    cool_parser = subparsers.add_parser("cooling", help="Turbine blade cooling flow estimation")
+    cool_parser.add_argument("--t-gas", type=float, required=True, help="Gas temperature (K)")
+    cool_parser.add_argument("--t-coolant", type=float, required=True, help="Coolant temperature (K)")
+    cool_parser.add_argument("--t-blade-max", type=float, default=1300.0, help="Max blade temperature (K)")
+    cool_parser.add_argument("--cooling-type", choices=["convection", "film", "transpiration"],
+                           default="film", help="Cooling type")
+    cool_parser.add_argument("--n-rows", type=int, default=2, help="Number of cooled rows")
+    cool_parser.add_argument("--mass-flow-gas", type=float, default=20.0, help="Gas mass flow (kg/s)")
+    cool_parser.add_argument("--report", type=str, default=None, help="Generate HTML report")
 
     # Parse
     args = parser.parse_args()
@@ -399,6 +455,16 @@ def main():
         _cmd_turbine(args)
     elif args.command == "engine-cycle":
         _cmd_engine_cycle(args)
+    elif args.command == "electric-motor":
+        _cmd_electric_motor(args)
+    elif args.command == "propeller":
+        _cmd_propeller(args)
+    elif args.command == "pump":
+        _cmd_pump(args)
+    elif args.command == "turbopump":
+        _cmd_turbopump(args)
+    elif args.command == "cooling":
+        _cmd_cooling(args)
 
 
 # ────────────────────────────────────────────────────────────────
@@ -1010,6 +1076,10 @@ def _cmd_engine_cycle(args):
         hp_rpm=args.hp_rpm,
         hp_r_hub=args.hp_r_hub,
         hp_r_tip=args.hp_r_tip,
+        afterburner=args.afterburner,
+        afterburner_temp=args.afterburner_temp,
+        nozzle_type=args.nozzle_type,
+        nozzle_design_mach=args.nozzle_mach,
     )
 
     print(result.summary())
@@ -1827,6 +1897,90 @@ def _cmd_sweep(args):
 
     n_success = sum(1 for r in results if r.success)
     print(f"\nSummary: {n_success}/{len(results)} successful")
+
+
+def _cmd_electric_motor(args):
+    """Run electric motor sizing."""
+    from astraturbo.design.electric_motor import electric_motor
+    result = electric_motor(
+        shaft_power=args.power, rpm=args.rpm, voltage=args.voltage,
+        motor_type=args.motor_type, eta_peak=args.eta_peak,
+        load_fraction=args.load_fraction,
+    )
+    print(result.summary())
+    if args.report:
+        from astraturbo.reports import generate_report, ReportConfig
+        cfg = ReportConfig(title=f"Electric Motor — {args.motor_type} {args.power/1000:.0f}kW", output_path=args.report)
+        generate_report(config=cfg, electric_motor_result=result)
+        print(f"\nReport generated: {args.report}")
+
+
+def _cmd_propeller(args):
+    """Run propeller/rotor design."""
+    from astraturbo.design.propeller import propeller_design
+    result = propeller_design(
+        thrust_required=args.thrust, n_blades=args.n_blades,
+        diameter=args.diameter, rpm=args.rpm,
+        V_flight=args.v_flight, altitude=args.altitude,
+    )
+    print(result.summary())
+    if args.report:
+        from astraturbo.reports import generate_report, ReportConfig
+        cfg = ReportConfig(title=f"Propeller — D={args.diameter}m {args.n_blades}-blade", output_path=args.report)
+        generate_report(config=cfg, propeller_result=result)
+        print(f"\nReport generated: {args.report}")
+
+
+def _cmd_pump(args):
+    """Run centrifugal pump design."""
+    from astraturbo.design.pump import centrifugal_pump, FLUIDS
+    fluid_density = FLUIDS.get(args.fluid, 998.0)
+    result = centrifugal_pump(
+        head=args.head, flow_rate=args.flow_rate, rpm=args.rpm,
+        fluid_density=fluid_density, fluid_name=args.fluid,
+    )
+    print(result.summary())
+    if args.report:
+        from astraturbo.reports import generate_report, ReportConfig
+        cfg = ReportConfig(title=f"Centrifugal Pump — {args.fluid} H={args.head}m", output_path=args.report)
+        generate_report(config=cfg, pump_result=result)
+        print(f"\nReport generated: {args.report}")
+
+
+def _cmd_turbopump(args):
+    """Run turbopump assembly design."""
+    from astraturbo.design.turbopump import turbopump
+    from astraturbo.design.pump import FLUIDS
+    fluid_density = FLUIDS.get(args.fluid, 1141.0)
+    result = turbopump(
+        pump_head=args.pump_head, pump_flow_rate=args.pump_flow,
+        fluid_density=fluid_density, fluid_name=args.fluid,
+        turbine_inlet_temp=args.turbine_temp,
+        turbine_inlet_pressure=args.turbine_pressure,
+        rpm=args.rpm, cycle_type=args.cycle_type,
+    )
+    print(result.summary())
+    if args.report:
+        from astraturbo.reports import generate_report, ReportConfig
+        cfg = ReportConfig(title=f"Turbopump — {args.fluid} {args.cycle_type}", output_path=args.report)
+        generate_report(config=cfg, turbopump_result=result)
+        print(f"\nReport generated: {args.report}")
+
+
+def _cmd_cooling(args):
+    """Run turbine blade cooling analysis."""
+    from astraturbo.design.cooling import cooling_flow
+    result = cooling_flow(
+        T_gas=args.t_gas, T_coolant=args.t_coolant,
+        T_blade_max=args.t_blade_max, cooling_type=args.cooling_type,
+        n_cooled_rows=args.n_rows, mass_flow_gas=args.mass_flow_gas,
+    )
+    print(result.summary())
+    if args.report:
+        from astraturbo.reports import generate_report, ReportConfig
+        cfg = ReportConfig(title=f"Blade Cooling — {args.cooling_type} Tg={args.t_gas}K", output_path=args.report)
+        generate_report(config=cfg, cooling_result=result)
+        print(f"\nReport generated: {args.report}")
 
 
 if __name__ == "__main__":
