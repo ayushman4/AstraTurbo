@@ -4,8 +4,53 @@ from __future__ import annotations
 
 import subprocess
 import shutil
+import platform
 from pathlib import Path
 from dataclasses import dataclass, field
+
+
+def _solver_install_hint(solver_name: str) -> str:
+    """Return platform-specific install instructions for a solver."""
+    system = platform.system()
+    hints = {
+        "simpleFoam": {
+            "Darwin": (
+                "Install OpenFOAM on macOS:\n"
+                "  brew install open-mpi\n"
+                "  Download from https://openfoam.org/download/\n"
+                "  Or use Docker: docker pull openfoam/openfoam2312-default"
+            ),
+            "Linux": (
+                "Install OpenFOAM on Linux:\n"
+                "  Ubuntu/Debian: sudo apt install openfoam\n"
+                "  Or: wget -q -O - https://dl.openfoam.org/gpg.key | sudo apt-key add -\n"
+                "  See: https://openfoam.org/download/"
+            ),
+            "Windows": (
+                "Install OpenFOAM on Windows:\n"
+                "  Use WSL2: wsl --install, then apt install openfoam\n"
+                "  Or Docker: docker pull openfoam/openfoam2312-default\n"
+                "  See: https://openfoam.org/download/windows/"
+            ),
+        },
+        "rhoSimpleFoam": None,  # same as simpleFoam
+        "SU2_CFD": {
+            "Darwin": "Install SU2: brew install su2 or https://su2code.github.io/download.html",
+            "Linux": "Install SU2: pip install SU2 or https://su2code.github.io/download.html",
+            "Windows": "Install SU2: https://su2code.github.io/download.html",
+        },
+        "ccx": {
+            "Darwin": "Install CalculiX: brew install calculix",
+            "Linux": "Install CalculiX: sudo apt install calculix-ccx",
+            "Windows": "Install CalculiX: http://www.calculix.de/",
+        },
+    }
+    solver_hints = hints.get(solver_name, hints.get("simpleFoam"))
+    if solver_hints is None:
+        solver_hints = hints["simpleFoam"]
+    if isinstance(solver_hints, dict):
+        return solver_hints.get(system, solver_hints.get("Linux", ""))
+    return solver_hints
 
 
 @dataclass
@@ -43,9 +88,12 @@ def run_openfoam(config: RunConfig) -> RunResult:
     # Check solver exists
     solver_path = shutil.which(config.solver)
     if solver_path is None:
+        hint = _solver_install_hint(config.solver)
         return RunResult(
             success=False, return_code=-1,
-            error_message=f"Solver '{config.solver}' not found in PATH",
+            error_message=(
+                f"Solver '{config.solver}' not found in PATH.\n\n{hint}"
+            ),
         )
 
     cmd = [config.solver, "-case", str(case_dir)]
@@ -99,9 +147,12 @@ def run_su2(config_file: str | Path, n_procs: int = 1) -> RunResult:
 
     solver_path = shutil.which("SU2_CFD")
     if solver_path is None:
+        hint = _solver_install_hint("SU2_CFD")
         return RunResult(
             success=False, return_code=-1,
-            error_message="SU2_CFD not found in PATH",
+            error_message=(
+                f"SU2_CFD not found in PATH.\n\n{hint}"
+            ),
         )
 
     cmd = ["SU2_CFD", str(config_file)]

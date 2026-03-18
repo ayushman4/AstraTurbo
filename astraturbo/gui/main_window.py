@@ -125,6 +125,13 @@ class MainWindow(QMainWindow):
 
         # --- Edit menu ---
         edit_menu = menubar.addMenu("&Edit")
+        self._undo_action = self._add_action(
+            edit_menu, "&Undo", self._undo, QKeySequence.Undo,
+        )
+        self._redo_action = self._add_action(
+            edit_menu, "&Redo", self._redo, QKeySequence.Redo,
+        )
+        edit_menu.addSeparator()
         self._add_action(edit_menu, "&Add Blade Row", self._add_blade_row)
         self._add_action(edit_menu, "Add &Profile to Row", self._add_profile_to_row)
 
@@ -147,6 +154,10 @@ class MainWindow(QMainWindow):
         self._add_action(cfd_menu, "ANSYS &Fluent...", lambda: self._setup_cfd("fluent"))
         self._add_action(cfd_menu, "ANSYS C&FX...", lambda: self._setup_cfd("cfx"))
         self._add_action(cfd_menu, "&SU2...", lambda: self._setup_cfd("su2"))
+
+        compute_menu.addSeparator()
+        self._add_action(compute_menu, "&Run Solver...", self._run_solver)
+        self._add_action(compute_menu, "Run Full &Pipeline...", self._run_full_pipeline)
 
         compute_menu.addSeparator()
         self._add_action(compute_menu, "FEA &Structural Analysis...", self._setup_fea)
@@ -964,6 +975,168 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             QMessageBox.warning(self, "Meanline Error", f"{e}\n\n{traceback.format_exc()}")
+
+    # ----------------------------------------------------------------
+    # Undo / Redo
+    # ----------------------------------------------------------------
+
+    def _undo(self) -> None:
+        """Undo the last action."""
+        from ..foundation.undo import stack
+        s = stack()
+        if s.canundo():
+            desc = s.undotext() or "Undo"
+            s.undo()
+            self.statusBar().showMessage(desc)
+        else:
+            self.statusBar().showMessage("Nothing to undo")
+
+    def _redo(self) -> None:
+        """Redo the last undone action."""
+        from ..foundation.undo import stack
+        s = stack()
+        if s.canredo():
+            desc = s.redotext() or "Redo"
+            s.redo()
+            self.statusBar().showMessage(desc)
+        else:
+            self.statusBar().showMessage("Nothing to redo")
+
+    # ----------------------------------------------------------------
+    # Run Solver
+    # ----------------------------------------------------------------
+
+    def _run_solver(self) -> None:
+        """Launch a CFD/FEA solver on an existing case directory."""
+        from PySide6.QtWidgets import QFileDialog, QInputDialog
+
+        case_dir = QFileDialog.getExistingDirectory(
+            self, "Select Case Directory", ".",
+        )
+        if not case_dir:
+            return
+
+        solver, ok = QInputDialog.getItem(
+            self, "Select Solver", "Solver:",
+            ["openfoam", "su2", "calculix"], 0, False,
+        )
+        if not ok:
+            return
+
+        try:
+            if solver == "openfoam":
+                from ..cfd.runner import run_openfoam, RunConfig
+                config = RunConfig(case_dir=case_dir)
+                self.statusBar().showMessage(f"Running OpenFOAM in {case_dir}...")
+                result = run_openfoam(config)
+            elif solver == "su2":
+                from ..cfd.runner import run_su2
+                from pathlib import Path
+                cfg_files = list(Path(case_dir).glob("*.cfg"))
+                if not cfg_files:
+                    QMessageBox.warning(self, "Error", "No .cfg file found in case directory")
+                    return
+                self.statusBar().showMessage(f"Running SU2 in {case_dir}...")
+                result = run_su2(cfg_files[0])
+            elif solver == "calculix":
+                import subprocess
+                from pathlib import Path
+                inp_files = list(Path(case_dir).glob("*.inp"))
+                if not inp_files:
+                    QMessageBox.warning(self, "Error", "No .inp file found in case directory")
+                    return
+                self.statusBar().showMessage(f"Running CalculiX in {case_dir}...")
+                proc = subprocess.run(
+                    ["ccx", str(inp_files[0].stem)],
+                    cwd=case_dir, capture_output=True, text=True, timeout=600,
+                )
+                if proc.returncode == 0:
+                    QMessageBox.information(self, "Solver Complete", "CalculiX completed successfully.")
+                else:
+                    QMessageBox.warning(self, "Solver Failed", f"CalculiX failed:\n{proc.stderr[:500]}")
+                self.statusBar().showMessage("CalculiX run complete")
+                return
+            else:
+                return
+
+            if result.success:
+                QMessageBox.information(
+                    self, "Solver Complete",
+                    f"{solver} completed successfully.\nLog: {result.log_file}",
+                )
+            else:
+                QMessageBox.warning(
+                    self, "Solver Failed",
+                    f"{solver} failed:\n{result.error_message}",
+                )
+            self.statusBar().showMessage(
+                f"{solver}: {'OK' if result.success else 'FAILED'}"
+            )
+        except FileNotFoundError:
+            QMessageBox.warning(
+                self, "Solver Not Found",
+                f"'{solver}' is not installed or not in PATH.\n\n"
+                "Install OpenFOAM: https://openfoam.org/download/\n"
+                "Install SU2: https://su2code.github.io/download.html\n"
+                "Install CalculiX: http://www.calculix.de/",
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Solver Error", f"{e}\n\n{traceback.format_exc()}")
+
+    # ----------------------------------------------------------------
+    # Run Full Pipeline (Design Chain)
+    # ----------------------------------------------------------------
+
+    def _run_full_pipeline(self) -> None:
+        """Run the full design pipeline: meanline → profile → blade → mesh → export → CFD."""
+        from PySide6.QtWidgets import QInputDialog
+
+        pr, ok = QInputDialog.getDouble(
+            self, "Full Pipeline", "Overall Pressure Ratio:", 1.5, 1.1, 30.0, 2,
+        )
+        if not ok:
+            return
+
+        mass_flow, ok = QInputDialog.getDouble(
+            self, "Full Pipeline", "Mass Flow (kg/s):", 20.0, 0.1, 1000.0, 1,
+        )
+        if not ok:
+            return
+
+        rpm, ok = QInputDialog.getDouble(
+            self, "Full Pipeline", "RPM:", 15000, 100, 100000, 0,
+        )
+        if not ok:
+            return
+
+        try:
+            from ..foundation.design_chain import DesignChain
+
+            chain = DesignChain()
+            self.statusBar().showMessage("Running full design pipeline...")
+
+            result = chain.set_parameters({
+                "pressure_ratio": pr,
+                "mass_flow": mass_flow,
+                "rpm": rpm,
+            })
+
+            if result is None:
+                QMessageBox.warning(self, "Pipeline Error", "Design chain returned no result.")
+                return
+
+            summary = f"Design Pipeline: {'SUCCESS' if result.success else 'FAILED'}\n"
+            summary += f"Total time: {result.total_time:.3f}s\n\n"
+            for stage in result.stages:
+                status = "OK" if stage.success else f"FAIL: {stage.error}"
+                summary += f"  {stage.stage_name:12s}  {stage.elapsed_time:.3f}s  {status}\n"
+
+            QMessageBox.information(self, "Pipeline Result", summary)
+            self.statusBar().showMessage(
+                f"Pipeline: {'OK' if result.success else 'FAILED'} in {result.total_time:.2f}s"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Pipeline Error", f"{e}\n\n{traceback.format_exc()}")
 
     # ----------------------------------------------------------------
     # CFD case setup

@@ -133,6 +133,32 @@ def main():
     ml_parser.add_argument("--rpm-fractions", type=str, default="0.5,0.6,0.7,0.8,0.9,0.95,1.0,1.05",
                            help="Comma-separated RPM fractions for map (default: 0.5,0.6,...,1.05)")
 
+    # --- blade ---
+    bl_parser = subparsers.add_parser("blade", help="Build 3D blade from hub-to-tip profiles")
+    bl_parser.add_argument("--r-hub", type=float, required=True, help="Hub radius (m)")
+    bl_parser.add_argument("--r-tip", type=float, required=True, help="Tip radius (m)")
+    bl_parser.add_argument("--axial-chord", type=float, default=0.05, help="Axial chord length (m)")
+    bl_parser.add_argument("--n-blades", type=int, default=24, help="Number of blades")
+    bl_parser.add_argument("--cl0-hub", type=float, default=0.8, help="CL0 at hub")
+    bl_parser.add_argument("--cl0-mid", type=float, default=1.0, help="CL0 at midspan")
+    bl_parser.add_argument("--cl0-tip", type=float, default=1.2, help="CL0 at tip")
+    bl_parser.add_argument("--thickness-hub", type=float, default=0.08, help="Max thickness at hub")
+    bl_parser.add_argument("--thickness-mid", type=float, default=0.10, help="Max thickness at midspan")
+    bl_parser.add_argument("--thickness-tip", type=float, default=0.12, help="Max thickness at tip")
+    bl_parser.add_argument("--stagger-hub", type=float, default=30.0, help="Stagger at hub (deg)")
+    bl_parser.add_argument("--stagger-mid", type=float, default=35.0, help="Stagger at midspan (deg)")
+    bl_parser.add_argument("--stagger-tip", type=float, default=40.0, help="Stagger at tip (deg)")
+    bl_parser.add_argument("-o", "--output", default=None, help="Output CGNS mesh file")
+
+    # --- pipeline ---
+    pipe_parser = subparsers.add_parser("pipeline", help="Run full design pipeline (meanline→profile→blade→mesh→CFD)")
+    pipe_parser.add_argument("--pr", type=float, default=1.5, help="Pressure ratio")
+    pipe_parser.add_argument("--mass-flow", type=float, default=20.0, help="Mass flow (kg/s)")
+    pipe_parser.add_argument("--rpm", type=float, default=15000.0, help="RPM")
+    pipe_parser.add_argument("--cl0", type=float, default=None, help="Override CL0 (auto from meanline if omitted)")
+    pipe_parser.add_argument("--cfd-output", default=None, help="CFD case output directory")
+    pipe_parser.add_argument("--compressible", action="store_true", help="Use compressible CFD")
+
     # --- fea ---
     fea_parser = subparsers.add_parser("fea", help="Set up FEA structural analysis")
     fea_parser.add_argument("--material", default="inconel_718", help="Material name")
@@ -307,6 +333,10 @@ def main():
         _cmd_hpc(args)
     elif args.command == "sweep":
         _cmd_sweep(args)
+    elif args.command == "blade":
+        _cmd_blade(args)
+    elif args.command == "pipeline":
+        _cmd_pipeline(args)
 
 
 # ────────────────────────────────────────────────────────────────
@@ -746,6 +776,97 @@ def _cmd_meanline(args):
                     print(f"\nSurge margin at design speed: {sm:.4f} ({sm*100:.1f}%)")
 
 
+def _cmd_blade(args):
+    """Build a 3D blade from hub-to-tip profiles."""
+    import numpy as np
+    from astraturbo.camberline import NACA65
+    from astraturbo.thickness import NACA65Series
+    from astraturbo.profile import Superposition
+    from astraturbo.blade import BladeRow
+
+    profiles = [
+        Superposition(NACA65(cl0=args.cl0_hub), NACA65Series(max_thickness=args.thickness_hub)),
+        Superposition(NACA65(cl0=args.cl0_mid), NACA65Series(max_thickness=args.thickness_mid)),
+        Superposition(NACA65(cl0=args.cl0_tip), NACA65Series(max_thickness=args.thickness_tip)),
+    ]
+
+    hub_pts = np.array([[0.0, args.r_hub], [args.axial_chord, args.r_hub]])
+    shroud_pts = np.array([[0.0, args.r_tip], [args.axial_chord, args.r_tip]])
+
+    row = BladeRow(hub_points=hub_pts, shroud_points=shroud_pts)
+    row.number_blades = args.n_blades
+    for p in profiles:
+        row.add_profile(p)
+
+    staggers = np.deg2rad([args.stagger_hub, args.stagger_mid, args.stagger_tip])
+    chords = np.array([args.axial_chord * 0.8, args.axial_chord, args.axial_chord * 1.2])
+    row.compute(stagger_angles=staggers, chord_lengths=chords)
+
+    print(f"3D Blade Built:")
+    print(f"  Blades: {args.n_blades}")
+    print(f"  Hub: {args.r_hub:.4f} m, Tip: {args.r_tip:.4f} m")
+    print(f"  CL0: {args.cl0_hub:.2f} / {args.cl0_mid:.2f} / {args.cl0_tip:.2f}")
+    print(f"  Thickness: {args.thickness_hub:.0%} / {args.thickness_mid:.0%} / {args.thickness_tip:.0%}")
+    print(f"  Stagger: {args.stagger_hub:.1f} / {args.stagger_mid:.1f} / {args.stagger_tip:.1f} deg")
+    if row.leading_edge is not None:
+        print(f"  Leading edge: {row.leading_edge.shape}")
+    if row.trailing_edge is not None:
+        print(f"  Trailing edge: {row.trailing_edge.shape}")
+    print(f"  3D profiles: {len(row.profiles_3d) if row.profiles_3d else 0} sections")
+
+    if args.output:
+        from astraturbo.mesh.multiblock import generate_blade_passage_mesh
+        mid_profile = profiles[1].as_array()
+        pitch = 2 * np.pi * (args.r_hub + args.r_tip) / 2.0 / args.n_blades
+        mesh = generate_blade_passage_mesh(
+            profile=mid_profile, pitch=pitch,
+            n_blade=30, n_ogrid=8, n_inlet=10, n_outlet=10, n_passage=15,
+        )
+        mesh.export_cgns(args.output)
+        print(f"\n  Mesh exported to {args.output}: {mesh.total_cells} cells")
+
+
+def _cmd_pipeline(args):
+    """Run the full design pipeline."""
+    from astraturbo.foundation.design_chain import DesignChain
+
+    chain = DesignChain()
+    params = {
+        "pressure_ratio": args.pr,
+        "mass_flow": args.mass_flow,
+        "rpm": args.rpm,
+    }
+    if args.cl0 is not None:
+        params["cl0"] = args.cl0
+    if args.cfd_output:
+        params["cfd_output"] = args.cfd_output
+    if args.compressible:
+        params["cfd_compressible"] = True
+
+    print(f"Running full design pipeline...")
+    print(f"  PR={args.pr}, mass_flow={args.mass_flow} kg/s, RPM={args.rpm}")
+    print()
+
+    result = chain.set_parameters(params)
+
+    if result is None:
+        print("ERROR: Design chain returned no result")
+        sys.exit(1)
+
+    print(f"Pipeline: {'SUCCESS' if result.success else 'FAILED'}")
+    print(f"Total time: {result.total_time:.3f}s\n")
+    for stage in result.stages:
+        status = "OK" if stage.success else f"FAIL: {stage.error}"
+        print(f"  {stage.stage_name:12s}  {stage.elapsed_time:.3f}s  {status}")
+        if stage.data:
+            for key, val in stage.data.items():
+                if isinstance(val, (int, float, str, bool)):
+                    print(f"    {key}: {val}")
+
+    if not result.success:
+        sys.exit(1)
+
+
 def _cmd_fea(args):
     """Set up FEA structural analysis."""
     from astraturbo.fea import (
@@ -1059,7 +1180,9 @@ def _cmd_run(args):
                 print(f"CalculiX failed (exit code {proc.returncode})")
                 print(proc.stderr[:500] if proc.stderr else "")
         except FileNotFoundError:
-            print("ERROR: CalculiX (ccx) not found in PATH. Install CalculiX first.")
+            from astraturbo.cfd.runner import _solver_install_hint
+            hint = _solver_install_hint("ccx")
+            print(f"ERROR: CalculiX (ccx) not found in PATH.\n\n{hint}")
             sys.exit(1)
         return  # CalculiX handled above
 
