@@ -1326,7 +1326,8 @@ class MainWindow(QMainWindow):
         """Show a dialog for HPC job submission."""
         from PySide6.QtWidgets import QInputDialog
 
-        actions = ["Submit job", "Check job status", "Cancel job", "Download results"]
+        actions = ["Submit job", "Check job status", "Cancel job",
+                   "Download results", "Setup AWS Batch", "Teardown AWS Batch"]
         action, ok = QInputDialog.getItem(
             self, "HPC Job Manager", "Select action:", actions, 0, False
         )
@@ -1453,6 +1454,67 @@ class MainWindow(QMainWindow):
                         self, "Download Failed",
                         f"Could not download results for job {job_id}"
                     )
+
+            elif action == "Setup AWS Batch":
+                from ..hpc.aws_setup import AWSBatchProvisioner
+
+                region, ok = QInputDialog.getText(
+                    self, "AWS Region", "AWS region:", text="us-east-1"
+                )
+                if not ok:
+                    return
+
+                platforms = ["EC2", "FARGATE"]
+                platform, ok = QInputDialog.getItem(
+                    self, "Platform", "Compute platform:", platforms, 0, False
+                )
+                if not ok:
+                    return
+
+                self.statusBar().showMessage("Provisioning AWS Batch infrastructure...")
+                provisioner = AWSBatchProvisioner(region=region, platform=platform)
+                messages: list[str] = []
+                result = provisioner.setup(log_fn=messages.append)
+
+                msg = (
+                    f"AWS Batch Provisioned\n\n"
+                    f"Region: {result.region}\n"
+                    f"S3 Bucket: {result.bucket_name}\n"
+                    f"Job Queue: {result.job_queue}\n"
+                    f"Compute Env: {result.compute_environment}\n\n"
+                    f"Created: {len(result.created_resources)}\n"
+                    f"Skipped (already existed): {len(result.skipped_resources)}"
+                )
+                QMessageBox.information(self, "AWS Setup Complete", msg)
+                self.statusBar().showMessage("AWS Batch environment ready")
+
+            elif action == "Teardown AWS Batch":
+                from ..hpc.aws_setup import AWSBatchProvisioner
+
+                region, ok = QInputDialog.getText(
+                    self, "AWS Region", "AWS region:", text="us-east-1"
+                )
+                if not ok:
+                    return
+
+                confirm = QMessageBox.question(
+                    self, "Confirm Teardown",
+                    f"This will delete all AstraTurbo AWS resources in {region}.\n\n"
+                    "S3 bucket will only be deleted if empty.\n"
+                    "Continue?",
+                    QMessageBox.Yes | QMessageBox.No,
+                )
+                if confirm != QMessageBox.Yes:
+                    return
+
+                self.statusBar().showMessage("Tearing down AWS resources...")
+                provisioner = AWSBatchProvisioner(region=region)
+                provisioner.teardown()
+                QMessageBox.information(
+                    self, "Teardown Complete",
+                    f"All AstraTurbo resources in {region} have been deleted."
+                )
+                self.statusBar().showMessage("AWS teardown complete")
 
         except Exception as e:
             QMessageBox.warning(self, "HPC Error", f"{e}\n\n{traceback.format_exc()}")

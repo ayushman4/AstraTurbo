@@ -3,6 +3,7 @@
 Provides job submission and management for remote HPC clusters,
 local execution, and AWS Batch:
   - job_manager: HPCJobManager with SLURM, PBS, Local, and AWS Batch backends
+  - aws_setup: AWSBatchProvisioner for one-command infrastructure provisioning
 """
 
 from .job_manager import (
@@ -14,6 +15,7 @@ from .job_manager import (
     AWSBatchBackend,
     JobStatus,
 )
+from .aws_setup import AWSBatchProvisioner
 
 __all__ = [
     "HPCJobManager",
@@ -22,5 +24,6 @@ __all__ = [
     "PBSBackend",
     "LocalBackend",
     "AWSBatchBackend",
+    "AWSBatchProvisioner",
     "JobStatus",
 ]

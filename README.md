@@ -30,6 +30,9 @@ pip install -e ".[ai]"
 
 # Everything (adds optimization, AI, dev tools)
 pip install -e ".[all]"
+
+# With AWS Batch support (adds boto3)
+pip install -e ".[aws]"
 ```
 
 Verify:
@@ -39,7 +42,7 @@ python -m astraturbo --version
 # astraturbo 0.1.0
 
 python -m pytest tests/ -q
-# 171 passed
+# 365+ passed
 ```
 
 ---
@@ -201,7 +204,39 @@ python -m astraturbo formats                    # List 30 supported formats
 python -m astraturbo optimize --profile blade.csv --generations 50
 python -m astraturbo multistage --profiles r.csv s.csv --pitches 0.05 0.06 -o stage.cgns
 python -m astraturbo run cfd_case --solver openfoam
+python -m astraturbo smooth --input mesh.cgns --iterations 20 -o smooth.cgns
+python -m astraturbo throughflow --pr 1.5 --mass-flow 20 --rpm 15000
+python -m astraturbo sweep --parameter cl0 --start 0.3 --end 1.2 --steps 10
+python -m astraturbo database list
+python -m astraturbo database save --name "rotor_v1" --params '{"chord": 0.05}'
 ```
+
+### HPC / Cloud job management
+
+```bash
+# Run locally (default)
+python -m astraturbo hpc submit ./cfd_case --backend local --solver openfoam
+
+# Run on SLURM cluster
+python -m astraturbo hpc submit ./cfd_case --backend slurm \
+  --host cluster.example.com --user engineer --nprocs 64
+
+# Run on AWS Batch (one-time setup, then submit)
+python -m astraturbo hpc setup-aws --region us-east-1 --platform EC2
+python -m astraturbo hpc submit ./cfd_case --backend aws \
+  --aws-s3-bucket astraturbo-batch-123456789012-us-east-1 \
+  --aws-job-queue astraturbo-queue --solver openfoam --nprocs 8
+
+# Monitor and retrieve
+python -m astraturbo hpc status <job-id>
+python -m astraturbo hpc download <job-id> --output-dir ./results
+python -m astraturbo hpc cancel <job-id>
+
+# Tear down AWS resources when done
+python -m astraturbo hpc teardown-aws --region us-east-1
+```
+
+Supported backends: **Local** (subprocess), **SLURM** (SSH), **PBS/Torque** (SSH), **AWS Batch** (boto3).
 
 ### End-to-end (no GUI)
 
@@ -441,12 +476,15 @@ astraturbo/
 ├── mesh/            Mesh generation:
 │   ├── transfinite    TFI with grading
 │   ├── scm_mesher     S2m meridional plane mesh
+│   ├── s1_mesher      Blade-to-blade mesh
 │   ├── ogrid/         O10H topology O-grid around blades
 │   ├── polyline       Polyline/Arc edge geometry
-│   ├── grading        Edge grading projection onto curves
+│   ├── grading        Edge grading, boundary layer clustering
 │   ├── vertex_extraction  Block topology from profiles
 │   ├── multiblock     Multi-block structured mesher (GridZ replacement)
 │   ├── multistage     Rotor+stator multi-row orchestration
+│   ├── tip_clearance  Tip clearance mesh generation
+│   ├── smoothing      Laplacian + orthogonality smoothing
 │   └── quality        Aspect ratio, skewness, y+ estimation
 ├── export/          30 formats: CGNS, OpenFOAM, Tecplot, VTK, Fluent, etc.
 ├── cfd/             4 solvers: OpenFOAM, Fluent, CFX, SU2
@@ -455,9 +493,12 @@ astraturbo/
 │   ├── calculix       Input file generation
 │   ├── mesh_export    Surface-to-solid mesh, CFD pressure mapping
 │   └── workflow       Coupled CFD-FEA pipeline
-├── optimization/    pymoo-based multi-objective optimization
+├── optimization/    pymoo-based multi-objective + multi-fidelity optimization
+├── solver/          Throughflow (S2m) solver with loss models
+├── database/        SQLite design database (save/search/compare/export)
+├── hpc/             HPC backends: Local, SLURM, PBS, AWS Batch + auto-provisioner
 ├── gui/             PySide6 GUI with 3D viewer + AI chat panel
-└── cli/             13 commands (profile, mesh, ai, meanline, cfd, fea, ...)
+└── cli/             20+ commands (profile, mesh, ai, meanline, cfd, fea, hpc, ...)
 ```
 
 ### Design pipeline
@@ -563,6 +604,7 @@ print(mat.to_calculix_format())  # Ready for FEA input
 | vtk | 3D visualization | Optional (`[gui]`) |
 | pymoo | Multi-objective optimization | Optional (`[optimization]`) |
 | anthropic | Claude AI assistant | Optional (`[ai]`) |
+| boto3 | AWS Batch HPC backend | Optional (`[aws]`) |
 | cadquery | STEP/IGES CAD export | Optional (`[cad]`) |
 | matplotlib | CLI profile plotting (`--plot`) | Optional |
 
@@ -575,8 +617,24 @@ All cross-platform (Windows, Linux, macOS).
 ```bash
 pip install -e ".[dev]"
 pytest tests/ -v
-# 171 tests pass
+# 365+ tests pass (unit, integration, validation, GUI, CLI)
 ```
+
+### Test coverage
+
+- **Unit tests**: Foundation, camberline, thickness, profile, blade, NURBS, mesh, export, design, FEA, CFD
+- **Integration tests**: CLI commands (38 tests), GUI components (29 tests), AI tools (9 tests)
+- **Validation tests**: Velocity triangles, meanline thermodynamics, NACA 65 profiles, mesh quality bounds
+- **Security tests**: XXE prevention, deserialization whitelisting, command injection prevention
+
+### Security
+
+- SSH commands use `shlex.quote()` — no shell injection
+- SQL queries use parameterized `?` placeholders — no SQL injection
+- XML parser rejects `DOCTYPE`/`ENTITY` — no XXE attacks
+- YAML deserialization whitelists `astraturbo.*` modules only
+- AWS credentials validated at init (STS `get-caller-identity`)
+- No `eval()`, `exec()`, or `pickle.load()` of untrusted data
 
 ---
 

@@ -212,6 +212,13 @@ def main():
     hpc_download = hpc_sub.add_parser("download", help="Download job results")
     hpc_download.add_argument("job_id", help="Job ID to download results for")
     hpc_download.add_argument("--output-dir", default=".", help="Local directory for results (default: .)")
+    hpc_setup = hpc_sub.add_parser("setup-aws", help="Provision AWS Batch infrastructure")
+    hpc_setup.add_argument("--region", default="us-east-1", help="AWS region (default: us-east-1)")
+    hpc_setup.add_argument("--platform", choices=["EC2", "FARGATE"], default="EC2", help="Compute platform")
+    hpc_setup.add_argument("--bucket-name", default="", help="S3 bucket name (auto-generated if empty)")
+    hpc_setup.add_argument("--max-vcpus", type=int, default=256, help="Max vCPUs (default: 256)")
+    hpc_teardown = hpc_sub.add_parser("teardown-aws", help="Delete all AstraTurbo AWS resources")
+    hpc_teardown.add_argument("--region", default="us-east-1", help="AWS region")
 
     # --- sweep ---
     sw_parser = subparsers.add_parser("sweep", help="Run a parametric sweep")
@@ -1134,8 +1141,31 @@ def _cmd_hpc(args):
             print(f"ERROR: Could not download results for job {args.job_id}")
             sys.exit(1)
 
+    elif args.hpc_command == "setup-aws":
+        from astraturbo.hpc.aws_setup import AWSBatchProvisioner
+        try:
+            provisioner = AWSBatchProvisioner(
+                region=args.region,
+                platform=args.platform,
+                max_vcpus=args.max_vcpus,
+                bucket_name=args.bucket_name,
+            )
+            provisioner.setup()
+        except Exception as e:
+            print(f"ERROR: AWS setup failed: {e}")
+            sys.exit(1)
+
+    elif args.hpc_command == "teardown-aws":
+        from astraturbo.hpc.aws_setup import AWSBatchProvisioner
+        try:
+            provisioner = AWSBatchProvisioner(region=args.region)
+            provisioner.teardown()
+        except Exception as e:
+            print(f"ERROR: AWS teardown failed: {e}")
+            sys.exit(1)
+
     else:
-        print("Usage: astraturbo hpc {submit|status|cancel|download}")
+        print("Usage: astraturbo hpc {submit|status|cancel|download|setup-aws|teardown-aws}")
         sys.exit(1)
 
 

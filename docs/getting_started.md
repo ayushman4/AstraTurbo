@@ -297,12 +297,20 @@ print(f"Estimated y+: {yp:.1f}")
 | `astraturbo.mesh` | `from astraturbo.mesh import SCMMesher, OGridGenerator` | Mesh generation |
 | `astraturbo.mesh.multiblock` | `from astraturbo.mesh.multiblock import generate_blade_passage_mesh` | Multi-block mesher |
 | `astraturbo.mesh.multistage` | `from astraturbo.mesh.multistage import MultistageGenerator` | Multi-row stages |
+| `astraturbo.mesh.smoothing` | `from astraturbo.mesh.smoothing import laplacian_smooth` | Mesh quality improvement |
+| `astraturbo.mesh.tip_clearance` | `from astraturbo.mesh.tip_clearance import generate_tip_clearance_mesh` | Tip gap mesh |
+| `astraturbo.solver` | `from astraturbo.solver.throughflow import ThroughflowSolver` | S2m throughflow solver |
 | `astraturbo.export` | `from astraturbo.export import write_cgns_structured` | File export |
 | `astraturbo.export` | `from astraturbo.export import read_openfoam_points` | OpenFOAM import |
-| `astraturbo.cfd` | `from astraturbo.cfd import create_openfoam_case` | CFD case setup |
+| `astraturbo.cfd` | `from astraturbo.cfd import CFDWorkflow` | CFD case setup |
 | `astraturbo.fea` | `from astraturbo.fea import FEAWorkflow, get_material` | Structural analysis |
 | `astraturbo.optimization` | `from astraturbo.optimization import Optimizer` | Design optimization |
+| `astraturbo.optimization.multifidelity` | `from astraturbo.optimization.multifidelity import MultiFidelityOptimizer` | Multi-fidelity optimization |
+| `astraturbo.database` | `from astraturbo.database import DesignDatabase` | Design database (SQLite) |
+| `astraturbo.hpc` | `from astraturbo.hpc import HPCJobManager, HPCConfig` | HPC job management |
+| `astraturbo.hpc.aws_setup` | `from astraturbo.hpc.aws_setup import AWSBatchProvisioner` | AWS infrastructure setup |
 | `astraturbo.ai` | `from astraturbo.ai import create_assistant` | AI assistant |
+| `astraturbo.ai.surrogate` | `from astraturbo.ai.surrogate import SurrogateTrainer` | Surrogate modeling (GPR/MLP) |
 
 ---
 
@@ -310,18 +318,28 @@ print(f"Estimated y+: {yp:.1f}")
 
 | Command | Description |
 |---|---|
-| `python -m astraturbo gui` | Launch graphical interface |
-| `python -m astraturbo ai` | AI design assistant (interactive chat) |
-| `python -m astraturbo ai "prompt"` | AI single request |
-| `python -m astraturbo profile [options]` | Generate a 2D blade profile |
-| `python -m astraturbo mesh [options]` | Generate a mesh from a profile CSV |
-| `python -m astraturbo meanline [options]` | Meanline compressor design |
-| `python -m astraturbo cfd [options]` | Set up CFD case (OpenFOAM/Fluent/CFX/SU2) |
-| `python -m astraturbo fea [options]` | Set up FEA structural analysis |
-| `python -m astraturbo yplus [options]` | y+ / cell height calculator |
-| `python -m astraturbo info <file>` | Inspect a mesh/points/CSV file |
-| `python -m astraturbo formats` | List 30 supported file formats |
-| `python -m astraturbo optimize [options]` | Run blade optimization |
-| `python -m astraturbo multistage [options]` | Multi-row stage mesh |
-| `python -m astraturbo run <case>` | Execute CFD/FEA solver |
-| `python -m astraturbo --help` | Show all commands |
+| `astraturbo gui` | Launch graphical interface |
+| `astraturbo ai` | AI design assistant (interactive chat) |
+| `astraturbo ai "prompt"` | AI single request |
+| `astraturbo profile [options]` | Generate a 2D blade profile |
+| `astraturbo mesh [options]` | Generate a mesh from a profile CSV |
+| `astraturbo meanline [options]` | Meanline compressor design |
+| `astraturbo cfd [options]` | Set up CFD case (OpenFOAM/Fluent/CFX/SU2) |
+| `astraturbo fea [options]` | Set up FEA structural analysis |
+| `astraturbo yplus [options]` | y+ / cell height calculator |
+| `astraturbo info <file>` | Inspect a mesh/points/CSV file |
+| `astraturbo formats` | List 30 supported file formats |
+| `astraturbo optimize [options]` | Run blade optimization |
+| `astraturbo multistage [options]` | Multi-row stage mesh |
+| `astraturbo run <case>` | Execute CFD/FEA solver |
+| `astraturbo throughflow [options]` | Run S2m throughflow solver |
+| `astraturbo smooth [options]` | Apply Laplacian mesh smoothing |
+| `astraturbo sweep [options]` | Run parametric sweep |
+| `astraturbo database {list,save,export}` | Design database management |
+| `astraturbo hpc submit <case>` | Submit job (local/SLURM/PBS/AWS) |
+| `astraturbo hpc status <job-id>` | Check job status |
+| `astraturbo hpc cancel <job-id>` | Cancel a running job |
+| `astraturbo hpc download <job-id>` | Download job results |
+| `astraturbo hpc setup-aws` | Provision AWS Batch infrastructure |
+| `astraturbo hpc teardown-aws` | Delete AWS resources |
+| `astraturbo --help` | Show all commands |

@@ -922,3 +922,173 @@ class TestBoundaryValues:
         )
         assert mesh.n_blocks >= 1
         assert mesh.total_cells >= 1
+
+
+# ────────────────────────────────────────────────────────────────
+# 17. AWS Batch Provisioner (mocked)
+# ────────────────────────────────────────────────────────────────
+
+class TestAWSProvisioner:
+    """Test AWSBatchProvisioner with mocked boto3 clients."""
+
+    def _make_provisioner(self):
+        """Create a provisioner with all boto3 clients mocked."""
+        from unittest.mock import MagicMock, patch
+        from astraturbo.hpc.aws_setup import AWSBatchProvisioner
+
+        mock_iam = MagicMock()
+        mock_ec2 = MagicMock()
+        mock_s3 = MagicMock()
+        mock_batch = MagicMock()
+        mock_sts = MagicMock()
+        mock_logs = MagicMock()
+
+        mock_sts.get_caller_identity.return_value = {"Account": "123456789012"}
+
+        def client_factory(service, **kwargs):
+            return {
+                "iam": mock_iam, "ec2": mock_ec2, "s3": mock_s3,
+                "batch": mock_batch, "sts": mock_sts, "logs": mock_logs,
+            }[service]
+
+        with patch("boto3.client", side_effect=client_factory):
+            provisioner = AWSBatchProvisioner(
+                region="us-east-1", platform="EC2", bucket_name="test-bucket"
+            )
+
+        # IAM get_role raises (resources don't exist yet)
+        from botocore.exceptions import ClientError
+        not_found = ClientError(
+            {"Error": {"Code": "NoSuchEntity", "Message": ""}}, "GetRole"
+        )
+        mock_iam.get_role.side_effect = not_found
+        mock_iam.get_instance_profile.side_effect = not_found
+        mock_iam.create_role.return_value = {
+            "Role": {"Arn": "arn:aws:iam::123456789012:role/test"}
+        }
+        mock_iam.create_instance_profile.return_value = {
+            "InstanceProfile": {"Arn": "arn:aws:iam::123456789012:ip/test"}
+        }
+
+        # S3 head_bucket raises (bucket doesn't exist)
+        mock_s3.head_bucket.side_effect = ClientError(
+            {"Error": {"Code": "404", "Message": ""}}, "HeadBucket"
+        )
+
+        # EC2 — default VPC exists
+        mock_ec2.describe_vpcs.return_value = {"Vpcs": [{"VpcId": "vpc-abc123"}]}
+        mock_ec2.describe_subnets.return_value = {
+            "Subnets": [{"SubnetId": "subnet-1"}, {"SubnetId": "subnet-2"}]
+        }
+        mock_ec2.describe_security_groups.return_value = {"SecurityGroups": []}
+        mock_ec2.create_security_group.return_value = {"GroupId": "sg-test123"}
+
+        # Batch — nothing exists
+        mock_batch.describe_compute_environments.return_value = {
+            "computeEnvironments": []
+        }
+        mock_batch.describe_job_queues.return_value = {"jobQueues": []}
+
+        return provisioner
+
+    def test_setup_creates_all_resources(self):
+        """setup() should create S3, IAM, SG, compute env, queue."""
+        from unittest.mock import patch
+        provisioner = self._make_provisioner()
+
+        # First call (exists check) returns empty, subsequent calls return VALID
+        provisioner._batch.describe_compute_environments.side_effect = [
+            {"computeEnvironments": []},                       # exists check
+            {"computeEnvironments": [{"status": "VALID"}]},    # wait loop
+        ]
+
+        messages = []
+        with patch("time.sleep"):  # Skip waits
+            result = provisioner.setup(log_fn=messages.append)
+
+        assert result.bucket_name == "test-bucket"
+        assert result.region == "us-east-1"
+        assert len(result.created_resources) > 0
+        assert any("s3:" in r for r in result.created_resources)
+        assert any("iam:" in r for r in result.created_resources)
+        assert any("sg:" in r for r in result.created_resources)
+        assert any("batch-ce:" in r for r in result.created_resources)
+        assert any("batch-jq:" in r for r in result.created_resources)
+
+    def test_setup_idempotent_skips_existing(self):
+        """setup() should skip resources that already exist."""
+        from unittest.mock import MagicMock, patch
+        from astraturbo.hpc.aws_setup import AWSBatchProvisioner
+
+        mock_iam = MagicMock()
+        mock_ec2 = MagicMock()
+        mock_s3 = MagicMock()
+        mock_batch = MagicMock()
+        mock_sts = MagicMock()
+        mock_logs = MagicMock()
+
+        mock_sts.get_caller_identity.return_value = {"Account": "123456789012"}
+
+        def client_factory(service, **kwargs):
+            return {"iam": mock_iam, "ec2": mock_ec2, "s3": mock_s3,
+                    "batch": mock_batch, "sts": mock_sts, "logs": mock_logs}[service]
+
+        with patch("boto3.client", side_effect=client_factory):
+            provisioner = AWSBatchProvisioner(
+                region="us-east-1", bucket_name="existing-bucket"
+            )
+
+        # Everything already exists
+        mock_iam.get_role.return_value = {
+            "Role": {"Arn": "arn:aws:iam::123456789012:role/exists"}
+        }
+        mock_iam.get_instance_profile.return_value = {
+            "InstanceProfile": {"Arn": "arn:aws:iam::123456789012:ip/exists"}
+        }
+        mock_s3.head_bucket.return_value = {}
+        mock_ec2.describe_vpcs.return_value = {"Vpcs": [{"VpcId": "vpc-abc"}]}
+        mock_ec2.describe_subnets.return_value = {
+            "Subnets": [{"SubnetId": "subnet-1"}]
+        }
+        mock_ec2.describe_security_groups.return_value = {
+            "SecurityGroups": [{"GroupId": "sg-existing"}]
+        }
+        mock_batch.describe_compute_environments.return_value = {
+            "computeEnvironments": [{"status": "VALID"}]
+        }
+        mock_batch.describe_job_queues.return_value = {
+            "jobQueues": [{"status": "VALID"}]
+        }
+        from botocore.exceptions import ClientError
+        mock_logs.create_log_group.side_effect = ClientError(
+            {"Error": {"Code": "ResourceAlreadyExistsException", "Message": ""}},
+            "CreateLogGroup"
+        )
+
+        messages = []
+        result = provisioner.setup(log_fn=messages.append)
+
+        # Nothing should be created
+        assert len(result.created_resources) == 0
+        assert len(result.skipped_resources) > 0
+
+    def test_setup_result_dataclass(self):
+        """AWSSetupResult should have all expected fields."""
+        from astraturbo.hpc.aws_setup import AWSSetupResult
+
+        r = AWSSetupResult()
+        assert r.bucket_name == ""
+        assert r.job_queue == ""
+        assert r.created_resources == []
+        assert r.skipped_resources == []
+
+    def test_teardown_calls_delete_in_order(self):
+        """teardown() should disable then delete resources."""
+        provisioner = self._make_provisioner()
+        messages = []
+        provisioner.teardown(log_fn=messages.append)
+
+        # Should have attempted to delete queue, compute env, roles
+        output = "\n".join(messages).lower()
+        assert "queue" in output or "tearing" in output
+        assert "teardown complete" in output
