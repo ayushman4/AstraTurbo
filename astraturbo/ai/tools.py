@@ -520,6 +520,318 @@ _register(
 
 
 # ──────────────────────────────────────────────────────
+# 14. Export mesh to file
+# ──────────────────────────────────────────────────────
+
+_register(
+    "export_mesh",
+    "Export a mesh to file. Generates a mesh from a 2D blade profile and exports "
+    "it to CGNS or OpenFOAM blockMeshDict format. This is the critical step that "
+    "writes the solver-ready mesh to disk.",
+    {
+        "type": "object",
+        "properties": {
+            "profile_path": {
+                "type": "string",
+                "description": "Path to blade profile CSV (x,y columns)",
+            },
+            "pitch": {
+                "type": "number",
+                "description": "Blade-to-blade spacing (m)",
+            },
+            "output_path": {
+                "type": "string",
+                "description": "Output file path (.cgns or blockMeshDict)",
+            },
+            "format": {
+                "type": "string",
+                "enum": ["cgns", "openfoam"],
+                "description": "Output format (default: cgns)",
+            },
+            "n_blade": {
+                "type": "integer",
+                "description": "Number of cells around blade (default: 40)",
+            },
+            "n_ogrid": {
+                "type": "integer",
+                "description": "O-grid wall-normal cells (default: 10)",
+            },
+            "n_inlet": {
+                "type": "integer",
+                "description": "Inlet block cells (default: 15)",
+            },
+            "n_outlet": {
+                "type": "integer",
+                "description": "Outlet block cells (default: 15)",
+            },
+            "n_passage": {
+                "type": "integer",
+                "description": "Passage pitchwise cells (default: 20)",
+            },
+        },
+        "required": ["profile_path", "pitch", "output_path"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
+# 15. Build 3D blade
+# ──────────────────────────────────────────────────────
+
+_register(
+    "build_3d_blade",
+    "Build a 3D blade from 2D profiles stacked hub to tip. Creates profiles at "
+    "multiple span positions with varying cl0 and thickness, stacks them with "
+    "stagger and chord, and optionally exports to CGNS.",
+    {
+        "type": "object",
+        "properties": {
+            "hub_radius": {
+                "type": "number",
+                "description": "Hub radius (m)",
+            },
+            "tip_radius": {
+                "type": "number",
+                "description": "Tip radius (m)",
+            },
+            "axial_chord": {
+                "type": "number",
+                "description": "Axial chord length (m). Default: 0.05",
+            },
+            "n_blades": {
+                "type": "integer",
+                "description": "Number of blades (default: 24)",
+            },
+            "cl0_hub": {
+                "type": "number",
+                "description": "CL0 at hub (default: 0.8)",
+            },
+            "cl0_mid": {
+                "type": "number",
+                "description": "CL0 at midspan (default: 1.0)",
+            },
+            "cl0_tip": {
+                "type": "number",
+                "description": "CL0 at tip (default: 1.2)",
+            },
+            "thickness_hub": {
+                "type": "number",
+                "description": "Max thickness fraction at hub (default: 0.08)",
+            },
+            "thickness_mid": {
+                "type": "number",
+                "description": "Max thickness fraction at midspan (default: 0.10)",
+            },
+            "thickness_tip": {
+                "type": "number",
+                "description": "Max thickness fraction at tip (default: 0.12)",
+            },
+            "stagger_hub_deg": {
+                "type": "number",
+                "description": "Stagger angle at hub (degrees, default: 30)",
+            },
+            "stagger_mid_deg": {
+                "type": "number",
+                "description": "Stagger angle at midspan (degrees, default: 35)",
+            },
+            "stagger_tip_deg": {
+                "type": "number",
+                "description": "Stagger angle at tip (degrees, default: 40)",
+            },
+            "output_path": {
+                "type": "string",
+                "description": "Optional output CGNS file path for the mesh",
+            },
+        },
+        "required": ["hub_radius", "tip_radius"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
+# 16. Run solver
+# ──────────────────────────────────────────────────────
+
+_register(
+    "run_solver",
+    "Launch a CFD or FEA solver on an existing case directory. Supports OpenFOAM, "
+    "SU2, and CalculiX. Returns status (success/failure) and log file path.",
+    {
+        "type": "object",
+        "properties": {
+            "case_dir": {
+                "type": "string",
+                "description": "Path to the case directory",
+            },
+            "solver": {
+                "type": "string",
+                "enum": ["openfoam", "su2", "calculix"],
+                "description": "Solver to run (default: openfoam)",
+            },
+            "n_procs": {
+                "type": "integer",
+                "description": "Number of parallel processes (default: 1)",
+            },
+        },
+        "required": ["case_dir"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
+# 17. Design chain (end-to-end pipeline)
+# ──────────────────────────────────────────────────────
+
+_register(
+    "design_chain",
+    "Run the full end-to-end design pipeline: meanline → profile → blade → mesh → "
+    "export → CFD. Auto-propagates parameters between stages. Set any combination "
+    "of design parameters and the chain runs all dependent stages automatically.",
+    {
+        "type": "object",
+        "properties": {
+            "pressure_ratio": {
+                "type": "number",
+                "description": "Overall pressure ratio",
+            },
+            "mass_flow": {
+                "type": "number",
+                "description": "Mass flow rate (kg/s)",
+            },
+            "rpm": {
+                "type": "number",
+                "description": "Rotational speed (RPM)",
+            },
+            "cl0": {
+                "type": "number",
+                "description": "Profile design lift coefficient",
+            },
+            "max_thickness": {
+                "type": "number",
+                "description": "Profile maximum thickness fraction",
+            },
+            "camber_type": {
+                "type": "string",
+                "description": "Camber line type (default: naca65)",
+            },
+            "thickness_type": {
+                "type": "string",
+                "description": "Thickness distribution type (default: naca65)",
+            },
+            "cfd_output": {
+                "type": "string",
+                "description": "Output directory for CFD case",
+            },
+            "cfd_compressible": {
+                "type": "boolean",
+                "description": "Use compressible solver (rhoSimpleFoam, default: false)",
+            },
+            "cfd_total_pressure": {
+                "type": "number",
+                "description": "Inlet total pressure (Pa) for compressible CFD",
+            },
+            "cfd_total_temperature": {
+                "type": "number",
+                "description": "Inlet total temperature (K) for compressible CFD",
+            },
+            "export_format": {
+                "type": "string",
+                "enum": ["cgns", "openfoam"],
+                "description": "Mesh export format (default: cgns)",
+            },
+            "export_path": {
+                "type": "string",
+                "description": "Mesh export file path",
+            },
+        },
+        "required": [],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
+# 18. Database save
+# ──────────────────────────────────────────────────────
+
+_register(
+    "database_save",
+    "Save a compressor design to the design database for later retrieval and "
+    "comparison. Stores parameters, results, tags, and notes.",
+    {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Design name (e.g., 'Rotor 37 baseline')",
+            },
+            "parameters": {
+                "type": "object",
+                "description": "Design parameters dict (e.g., {pr: 2.1, mass_flow: 20, rpm: 17189})",
+            },
+            "results": {
+                "type": "object",
+                "description": "Optional results dict (e.g., {efficiency: 0.88, n_stages: 3})",
+            },
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional tags for categorization (e.g., ['compressor', 'rotor37'])",
+            },
+            "notes": {
+                "type": "string",
+                "description": "Optional notes about the design",
+            },
+        },
+        "required": ["name", "parameters"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
+# 19. Database query
+# ──────────────────────────────────────────────────────
+
+_register(
+    "database_query",
+    "Search and list designs in the database. Can search by name, tags, or list "
+    "all designs. Also supports comparing two designs side by side.",
+    {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["list", "search", "compare", "load"],
+                "description": "Action: list (all), search (by query), compare (two IDs), load (by ID)",
+            },
+            "query": {
+                "type": "string",
+                "description": "Search query (for 'search' action)",
+            },
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Filter by tags (for 'search' or 'list' action)",
+            },
+            "design_id": {
+                "type": "integer",
+                "description": "Design ID (for 'load' action)",
+            },
+            "compare_ids": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "Two design IDs to compare (for 'compare' action)",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max results to return (default: 20)",
+            },
+        },
+        "required": ["action"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
 # Tool execution dispatcher
 # ──────────────────────────────────────────────────────
 
@@ -552,6 +864,18 @@ def execute_tool(name: str, inputs: dict) -> str:
             return _exec_off_design(inputs)
         elif name == "generate_compressor_map":
             return _exec_compressor_map(inputs)
+        elif name == "export_mesh":
+            return _exec_export_mesh(inputs)
+        elif name == "build_3d_blade":
+            return _exec_build_3d_blade(inputs)
+        elif name == "run_solver":
+            return _exec_run_solver(inputs)
+        elif name == "design_chain":
+            return _exec_design_chain(inputs)
+        elif name == "database_save":
+            return _exec_database_save(inputs)
+        elif name == "database_query":
+            return _exec_database_query(inputs)
         else:
             return f"Unknown tool: {name}"
     except Exception as e:
@@ -927,3 +1251,336 @@ def _exec_compressor_map(inputs: dict) -> str:
                 output += f"\n\nSurge margin at design speed: {sm:.4f} ({sm*100:.1f}%)"
 
     return output
+
+
+def _exec_export_mesh(inputs: dict) -> str:
+    import numpy as np
+    from astraturbo.mesh.multiblock import generate_blade_passage_mesh
+
+    profile_path = inputs["profile_path"]
+    _validate_path(profile_path)
+
+    pitch = float(inputs["pitch"])
+    output_path = inputs["output_path"]
+    _validate_path(output_path)
+    fmt = inputs.get("format", "cgns")
+
+    # Load profile
+    profile = np.loadtxt(profile_path, delimiter=",", skiprows=1)
+    if profile.ndim != 2 or profile.shape[1] < 2:
+        profile = np.loadtxt(profile_path, delimiter=",")
+
+    n_blade = int(inputs.get("n_blade", 40))
+    n_ogrid = int(inputs.get("n_ogrid", 10))
+    n_inlet = int(inputs.get("n_inlet", 15))
+    n_outlet = int(inputs.get("n_outlet", 15))
+    n_passage = int(inputs.get("n_passage", 20))
+
+    mesh = generate_blade_passage_mesh(
+        profile=profile[:, :2], pitch=pitch,
+        n_blade=n_blade, n_ogrid=n_ogrid,
+        n_inlet=n_inlet, n_outlet=n_outlet, n_passage=n_passage,
+    )
+
+    if fmt == "openfoam":
+        from astraturbo.export import write_blockmeshdict
+        write_blockmeshdict(output_path, mesh)
+        return (
+            f"OpenFOAM blockMeshDict exported to {output_path}\n"
+            f"Mesh: {mesh.n_blocks} blocks, {mesh.total_cells} cells"
+        )
+    else:
+        mesh.export_cgns(output_path)
+        return (
+            f"CGNS mesh exported to {output_path}\n"
+            f"Mesh: {mesh.n_blocks} blocks, {mesh.total_cells} cells"
+        )
+
+
+def _exec_build_3d_blade(inputs: dict) -> str:
+    import numpy as np
+    from astraturbo.camberline import NACA65
+    from astraturbo.thickness import NACA65Series
+    from astraturbo.profile import Superposition
+    from astraturbo.blade import BladeRow
+
+    r_hub = float(inputs["hub_radius"])
+    r_tip = float(inputs["tip_radius"])
+    if r_hub <= 0 or r_tip <= 0 or r_tip <= r_hub:
+        return "Error: radii invalid (need 0 < hub_radius < tip_radius)"
+
+    axial_chord = float(inputs.get("axial_chord", 0.05))
+    n_blades = int(inputs.get("n_blades", 24))
+
+    cl0_hub = float(inputs.get("cl0_hub", 0.8))
+    cl0_mid = float(inputs.get("cl0_mid", 1.0))
+    cl0_tip = float(inputs.get("cl0_tip", 1.2))
+
+    t_hub = float(inputs.get("thickness_hub", 0.08))
+    t_mid = float(inputs.get("thickness_mid", 0.10))
+    t_tip = float(inputs.get("thickness_tip", 0.12))
+
+    stagger_hub = float(inputs.get("stagger_hub_deg", 30))
+    stagger_mid = float(inputs.get("stagger_mid_deg", 35))
+    stagger_tip = float(inputs.get("stagger_tip_deg", 40))
+
+    # Create profiles
+    profiles = [
+        Superposition(NACA65(cl0=cl0_hub), NACA65Series(max_thickness=t_hub)),
+        Superposition(NACA65(cl0=cl0_mid), NACA65Series(max_thickness=t_mid)),
+        Superposition(NACA65(cl0=cl0_tip), NACA65Series(max_thickness=t_tip)),
+    ]
+
+    # Flow channel
+    hub_pts = np.array([[0.0, r_hub], [axial_chord, r_hub]])
+    shroud_pts = np.array([[0.0, r_tip], [axial_chord, r_tip]])
+
+    row = BladeRow(hub_points=hub_pts, shroud_points=shroud_pts)
+    row.number_blades = n_blades
+    for p in profiles:
+        row.add_profile(p)
+
+    chord_hub = axial_chord * 0.8
+    chord_mid = axial_chord
+    chord_tip = axial_chord * 1.2
+
+    row.compute(
+        stagger_angles=np.deg2rad([stagger_hub, stagger_mid, stagger_tip]),
+        chord_lengths=np.array([chord_hub, chord_mid, chord_tip]),
+    )
+
+    output = (
+        f"3D Blade Built:\n"
+        f"  Blades: {n_blades}\n"
+        f"  Hub radius: {r_hub:.4f} m, Tip radius: {r_tip:.4f} m\n"
+        f"  Profiles: 3 (hub/mid/tip)\n"
+        f"  CL0: {cl0_hub:.2f} / {cl0_mid:.2f} / {cl0_tip:.2f}\n"
+        f"  Thickness: {t_hub:.0%} / {t_mid:.0%} / {t_tip:.0%}\n"
+        f"  Stagger: {stagger_hub:.1f} / {stagger_mid:.1f} / {stagger_tip:.1f} deg\n"
+        f"  Leading edge: {row.leading_edge.shape if row.leading_edge is not None else 'N/A'}\n"
+        f"  Trailing edge: {row.trailing_edge.shape if row.trailing_edge is not None else 'N/A'}\n"
+        f"  3D profiles: {len(row.profiles_3d) if row.profiles_3d else 0} sections\n"
+    )
+
+    # Optional mesh export
+    if "output_path" in inputs:
+        output_path = inputs["output_path"]
+        _validate_path(output_path)
+        from astraturbo.mesh.multiblock import generate_blade_passage_mesh
+        mid_profile = profiles[1].as_array()
+        pitch = 2 * np.pi * (r_hub + r_tip) / 2.0 / n_blades
+        mesh = generate_blade_passage_mesh(
+            profile=mid_profile, pitch=pitch,
+            n_blade=30, n_ogrid=8, n_inlet=10, n_outlet=10, n_passage=15,
+        )
+        mesh.export_cgns(output_path)
+        output += f"\n  Mesh exported to {output_path}: {mesh.total_cells} cells"
+
+    return output
+
+
+def _exec_run_solver(inputs: dict) -> str:
+    from pathlib import Path
+
+    case_dir = inputs["case_dir"]
+    _validate_path(case_dir)
+    solver = inputs.get("solver", "openfoam")
+    n_procs = int(inputs.get("n_procs", 1))
+
+    if not Path(case_dir).is_dir():
+        return f"Error: case directory '{case_dir}' does not exist"
+
+    if solver == "openfoam":
+        from astraturbo.cfd.runner import run_openfoam, RunConfig
+        config = RunConfig(case_dir=case_dir, n_procs=n_procs)
+        result = run_openfoam(config)
+        return (
+            f"OpenFOAM run {'succeeded' if result.success else 'FAILED'}\n"
+            f"  Return code: {result.return_code}\n"
+            f"  Log file: {result.log_file}\n"
+            f"  {result.error_message if result.error_message else ''}"
+        )
+    elif solver == "su2":
+        from astraturbo.cfd.runner import run_su2
+        cfg_files = list(Path(case_dir).glob("*.cfg"))
+        if not cfg_files:
+            return f"Error: no .cfg file found in {case_dir}"
+        result = run_su2(cfg_files[0], n_procs=n_procs)
+        return (
+            f"SU2 run {'succeeded' if result.success else 'FAILED'}\n"
+            f"  Return code: {result.return_code}\n"
+            f"  {result.error_message if result.error_message else ''}"
+        )
+    elif solver == "calculix":
+        import subprocess
+        inp_files = list(Path(case_dir).glob("*.inp"))
+        if not inp_files:
+            return f"Error: no .inp file found in {case_dir}"
+        try:
+            proc = subprocess.run(
+                ["ccx", str(inp_files[0].stem)],
+                cwd=case_dir, capture_output=True, text=True, timeout=600,
+            )
+            success = proc.returncode == 0
+            return (
+                f"CalculiX run {'succeeded' if success else 'FAILED'}\n"
+                f"  Return code: {proc.returncode}\n"
+                f"  {proc.stderr[:500] if proc.stderr else ''}"
+            )
+        except FileNotFoundError:
+            return "Error: CalculiX (ccx) not found in PATH"
+        except subprocess.TimeoutExpired:
+            return "Error: CalculiX run timed out (600s limit)"
+    else:
+        return f"Error: unknown solver '{solver}'"
+
+
+def _exec_design_chain(inputs: dict) -> str:
+    from astraturbo.foundation.design_chain import DesignChain
+
+    chain = DesignChain()
+    params = {}
+
+    param_map = {
+        "pressure_ratio": "pressure_ratio",
+        "mass_flow": "mass_flow",
+        "rpm": "rpm",
+        "cl0": "cl0",
+        "max_thickness": "max_thickness",
+        "camber_type": "camber_type",
+        "thickness_type": "thickness_type",
+        "cfd_output": "cfd_output",
+        "cfd_compressible": "cfd_compressible",
+        "cfd_total_pressure": "cfd_total_pressure",
+        "cfd_total_temperature": "cfd_total_temperature",
+        "export_format": "export_format",
+        "export_path": "export_path",
+    }
+
+    for input_key, chain_key in param_map.items():
+        if input_key in inputs:
+            params[chain_key] = inputs[input_key]
+
+    if not params:
+        return "Error: no design parameters provided"
+
+    result = chain.set_parameters(params)
+
+    if result is None:
+        return "Error: design chain returned no result"
+
+    output = f"Design Chain: {'SUCCESS' if result.success else 'FAILED'}\n"
+    output += f"  Total time: {result.total_time:.3f}s\n\n"
+    output += "  Stage Results:\n"
+    for stage in result.stages:
+        status = "OK" if stage.success else f"FAIL: {stage.error}"
+        output += f"    {stage.stage_name:12s}  {stage.elapsed_time:.3f}s  {status}\n"
+        if stage.data:
+            for key, val in stage.data.items():
+                if isinstance(val, (int, float, str, bool)):
+                    output += f"      {key}: {val}\n"
+
+    return output
+
+
+def _exec_database_save(inputs: dict) -> str:
+    from astraturbo.database import DesignDatabase
+
+    name = inputs["name"]
+    parameters = inputs["parameters"]
+    results = inputs.get("results", None)
+    tags = inputs.get("tags", None)
+    notes = inputs.get("notes", "")
+
+    with DesignDatabase() as db:
+        design_id = db.save_design(
+            name=name,
+            parameters=parameters,
+            results=results,
+            tags=tags,
+            notes=notes,
+        )
+
+    return (
+        f"Design saved to database:\n"
+        f"  ID: {design_id}\n"
+        f"  Name: {name}\n"
+        f"  Parameters: {len(parameters)} fields\n"
+        f"  Tags: {tags if tags else 'none'}\n"
+    )
+
+
+def _exec_database_query(inputs: dict) -> str:
+    from astraturbo.database import DesignDatabase
+
+    action = inputs["action"]
+    limit = int(inputs.get("limit", 20))
+
+    with DesignDatabase() as db:
+        if action == "list":
+            filters = {}
+            if "tags" in inputs:
+                filters["tags"] = inputs["tags"]
+            designs = db.list_designs(filters=filters if filters else None, limit=limit)
+            if not designs:
+                return "No designs found in database."
+            output = f"Designs in database ({len(designs)}):\n\n"
+            for d in designs:
+                output += (
+                    f"  ID {d['id']}: {d['name']}\n"
+                    f"    Created: {d.get('created_at', 'N/A')}\n"
+                    f"    Tags: {d.get('tags', [])}\n"
+                    f"    Parameters: {d.get('parameters', {})}\n\n"
+                )
+            return output
+
+        elif action == "search":
+            query = inputs.get("query", "")
+            tags = inputs.get("tags", None)
+            designs = db.search(query=query, tags=tags, limit=limit)
+            if not designs:
+                return f"No designs matching '{query}'."
+            output = f"Search results for '{query}' ({len(designs)}):\n\n"
+            for d in designs:
+                output += f"  ID {d['id']}: {d['name']}\n"
+                output += f"    Parameters: {d.get('parameters', {})}\n\n"
+            return output
+
+        elif action == "load":
+            design_id = int(inputs.get("design_id", 0))
+            if design_id <= 0:
+                return "Error: design_id required for load action"
+            try:
+                d = db.load_design(design_id)
+            except KeyError:
+                return f"Error: design ID {design_id} not found"
+            output = f"Design {d['id']}: {d['name']}\n\n"
+            output += f"  Parameters:\n"
+            for k, v in d.get("parameters", {}).items():
+                output += f"    {k}: {v}\n"
+            if d.get("results"):
+                output += f"\n  Results:\n"
+                for k, v in d["results"].items():
+                    output += f"    {k}: {v}\n"
+            if d.get("notes"):
+                output += f"\n  Notes: {d['notes']}\n"
+            return output
+
+        elif action == "compare":
+            ids = inputs.get("compare_ids", [])
+            if len(ids) != 2:
+                return "Error: compare requires exactly 2 design IDs"
+            result = db.compare(int(ids[0]), int(ids[1]))
+            output = f"Comparison: Design {ids[0]} vs Design {ids[1]}\n\n"
+            output += f"  Design 1: {result.get('design_1', {}).get('name', 'N/A')}\n"
+            output += f"  Design 2: {result.get('design_2', {}).get('name', 'N/A')}\n\n"
+            if result.get("parameter_differences"):
+                output += "  Parameter Differences:\n"
+                for diff in result["parameter_differences"]:
+                    output += f"    {diff}\n"
+            if result.get("summary"):
+                output += f"\n  Summary: {result['summary']}\n"
+            return output
+
+        else:
+            return f"Error: unknown action '{action}'"
