@@ -60,6 +60,8 @@ class MainWindow(QMainWindow):
         self._current_profile: Superposition | None = None
         self._last_mesh = None
         self._last_mesh_blocks = None
+        self._last_cfd_case: str | None = None
+        self._last_cfd_solver: str | None = None
 
         # Build a default blade row with a default profile
         self._init_default_project()
@@ -1007,21 +1009,64 @@ class MainWindow(QMainWindow):
     # ----------------------------------------------------------------
 
     def _run_solver(self) -> None:
-        """Launch a CFD/FEA solver on an existing case directory."""
-        from PySide6.QtWidgets import QFileDialog, QInputDialog
-
-        case_dir = QFileDialog.getExistingDirectory(
-            self, "Select Case Directory", ".",
+        """Launch a CFD/FEA solver on a case directory."""
+        from PySide6.QtWidgets import (
+            QFileDialog, QDialog, QVBoxLayout, QFormLayout,
+            QLineEdit, QComboBox, QPushButton, QHBoxLayout, QDialogButtonBox,
         )
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Run Solver")
+        layout = QVBoxLayout(dlg)
+
+        form = QFormLayout()
+
+        # Case directory with browse button
+        case_row = QHBoxLayout()
+        case_edit = QLineEdit()
+        case_edit.setPlaceholderText("Path to CFD/FEA case directory...")
+        if self._last_cfd_case:
+            case_edit.setText(self._last_cfd_case)
+        browse_btn = QPushButton("Browse...")
+        def _browse():
+            d = QFileDialog.getExistingDirectory(dlg, "Select Case", case_edit.text() or ".")
+            if d:
+                case_edit.setText(d)
+        browse_btn.clicked.connect(_browse)
+        case_row.addWidget(case_edit)
+        case_row.addWidget(browse_btn)
+        form.addRow("Case Directory:", case_row)
+
+        # Solver selector — pre-fill from last CFD setup
+        solver_combo = QComboBox()
+        solver_combo.addItems(["openfoam", "su2", "calculix"])
+        if self._last_cfd_solver:
+            idx = solver_combo.findText(self._last_cfd_solver)
+            if idx >= 0:
+                solver_combo.setCurrentIndex(idx)
+        form.addRow("Solver:", solver_combo)
+
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Run")
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        case_dir = case_edit.text().strip()
+        solver = solver_combo.currentText()
+
         if not case_dir:
+            QMessageBox.warning(self, "Error", "No case directory specified.")
             return
 
-        solver, ok = QInputDialog.getItem(
-            self, "Select Solver", "Solver:",
-            ["openfoam", "su2", "calculix"], 0, False,
-        )
-        if not ok:
-            return
+        self._run_solver_on_case(case_dir, solver)
+
+    def _run_solver_on_case(self, case_dir: str, solver: str) -> None:
+        """Execute a solver on the given case directory."""
 
         try:
             if solver == "openfoam":
@@ -1241,6 +1286,19 @@ class MainWindow(QMainWindow):
 
             QMessageBox.information(self, "CFD Case Created", msg)
             self.statusBar().showMessage(f"CFD case ({solver_name}) created at {case}")
+
+            # Store for Run Solver quick-access
+            self._last_cfd_case = str(case)
+            self._last_cfd_solver = solver
+
+            # Offer to run immediately
+            run_now = QMessageBox.question(
+                self, "Run Solver?",
+                f"CFD case created at:\n{case}\n\nRun the solver now?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if run_now == QMessageBox.Yes:
+                self._run_solver_on_case(str(case), solver)
         except Exception as e:
             QMessageBox.warning(self, "CFD Error", str(e))
 
