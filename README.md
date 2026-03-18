@@ -42,7 +42,7 @@ python -m astraturbo --version
 # astraturbo 0.1.0
 
 python -m pytest tests/ -q
-# 435+ passed
+# 453+ passed
 ```
 
 ---
@@ -211,6 +211,22 @@ python -m astraturbo centrifugal --pr 3.0 --mass-flow 1.0 --rpm 60000
 python -m astraturbo centrifugal --pr 2.5 --mass-flow 0.5 --rpm 120000 --report report.html
 ```
 
+### Axial turbine design
+
+```bash
+# HP turbine (Kaveri-class): ER=2.5, hot gas at 1500 K
+python -m astraturbo turbine --expansion-ratio 2.5 --mass-flow 20 --rpm 17189 \
+  --r-hub 0.25 --r-tip 0.35 --inlet-temp 1500
+
+# LP turbine with 2 stages
+python -m astraturbo turbine --expansion-ratio 3.0 --mass-flow 20 --rpm 12000 \
+  --r-hub 0.30 --r-tip 0.45 --inlet-temp 1000 --n-stages 2
+
+# With HTML report
+python -m astraturbo turbine --expansion-ratio 2.5 --mass-flow 20 --rpm 17189 \
+  --r-hub 0.25 --r-tip 0.35 --inlet-temp 1500 --report turbine_report.html
+```
+
 ### Design reports
 
 ```bash
@@ -374,6 +390,41 @@ from astraturbo.reports import generate_report, ReportConfig
 generate_report(
     config=ReportConfig(title="Drone Compressor", output_path="report.html"),
     centrifugal_result=result,
+)
+```
+
+### Axial turbine design
+
+```python
+from astraturbo.design import meanline_turbine, meanline_to_turbine_blade_parameters
+
+# Design an HP turbine (hot gas from combustor)
+result = meanline_turbine(
+    overall_expansion_ratio=2.5,  # P_in / P_out
+    mass_flow=20.0,               # kg/s
+    rpm=17189,
+    r_hub=0.25,                   # m
+    r_tip=0.35,                   # m
+    T_inlet=1500.0,               # K (turbine inlet temperature)
+)
+
+print(result.summary())
+# Turbine Meanline Analysis: 1 stage(s)
+#   Overall ER:   2.500
+#   Overall TR:   0.7901
+#   Total work:   316450 J/kg
+#   Stage 1: ER=2.500, phi=0.835, psi=1.085, R=0.500
+#   Zweifel=0.813, Nozzle M=1.021
+
+# Get NGV and rotor blade parameters
+params = meanline_to_turbine_blade_parameters(result)
+# [{stage: 1, ngv_stagger_deg: 25.7, rotor_stagger_deg: -24.2, zweifel: 0.813, ...}]
+
+# Generate HTML report
+from astraturbo.reports import generate_report, ReportConfig
+generate_report(
+    config=ReportConfig(title="HP Turbine", output_path="turbine_report.html"),
+    turbine_result=result,
 )
 ```
 
@@ -546,10 +597,10 @@ print(response2)
 assistant.reset()
 ```
 
-Claude calls 21 AstraTurbo tools directly —
-meanline design (axial + centrifugal), off-design analysis, compressor maps,
-profile generation, 3D blade building, mesh generation and export, CFD setup,
-solver execution, FEA setup, y+ calculator, full design pipeline, design
+Claude calls 22 AstraTurbo tools directly —
+meanline design (axial compressor + centrifugal + turbine), off-design analysis,
+compressor maps, profile generation, 3D blade building, mesh generation and export,
+CFD setup, solver execution, FEA setup, y+ calculator, full design pipeline, design
 database, HTML report generation, file inspection, material database.
 
 Setup:
@@ -564,8 +615,8 @@ export ANTHROPIC_API_KEY=sk-ant-api03-...
 
 ```
 astraturbo/
-├── ai/              Claude-powered AI assistant (21 tools, NL interface)
-├── design/          Velocity triangles, meanline (axial + centrifugal), off-design, compressor maps
+├── ai/              Claude-powered AI assistant (22 tools, NL interface)
+├── design/          Velocity triangles, meanline (axial compressor + centrifugal + turbine), off-design, compressor maps
 ├── foundation/      Property system, signals, undo/redo, serialization
 ├── baseclass/       ATObject, Node tree, Drawable mixin
 ├── camberline/      8 camber line types
@@ -771,7 +822,7 @@ All cross-platform (Windows, Linux, macOS).
 ```bash
 pip install -e ".[dev]"
 pytest tests/ -v
-# 435+ tests pass (unit, integration, validation, GUI, CLI)
+# 453+ tests pass (unit, integration, validation, GUI, CLI)
 ```
 
 ### Test coverage

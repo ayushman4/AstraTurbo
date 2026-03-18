@@ -507,6 +507,76 @@ The map summary is appended to the result dialog.
 
 ---
 
+## Tutorial 6c: Axial Turbine Design
+
+Design HP and LP turbines using the turbine meanline solver. The solver handles
+expanding flow, NGV-first blade ordering, Soderberg losses, and Zweifel loading.
+
+### From the command line
+
+```bash
+# HP turbine (Kaveri-class)
+python -m astraturbo turbine --expansion-ratio 2.5 --mass-flow 20 --rpm 17189 \
+  --r-hub 0.25 --r-tip 0.35 --inlet-temp 1500
+
+# LP turbine with 2 stages
+python -m astraturbo turbine --expansion-ratio 3.0 --mass-flow 20 --rpm 12000 \
+  --r-hub 0.30 --r-tip 0.45 --inlet-temp 1000 --n-stages 2
+```
+
+### From Python
+
+```python
+from astraturbo.design import meanline_turbine, meanline_to_turbine_blade_parameters
+
+# Design an HP turbine
+result = meanline_turbine(
+    overall_expansion_ratio=2.5,  # P_in / P_out
+    mass_flow=20.0,               # kg/s
+    rpm=17189,
+    r_hub=0.25,
+    r_tip=0.35,
+    T_inlet=1500.0,               # Hot gas from combustor (K)
+    P_inlet=400000.0,             # Pa
+)
+
+print(result.summary())
+# Shows: ER, TR, efficiency, work output, per-stage phi/psi/R/Zweifel/Mach
+
+# Get NGV and rotor blade parameters
+params = meanline_to_turbine_blade_parameters(result)
+for p in params:
+    print(f"Stage {p['stage']}:")
+    print(f"  NGV:   stagger={p['ngv_stagger_deg']:.1f} deg, camber={p['ngv_camber_deg']:.1f} deg")
+    print(f"  Rotor: stagger={p['rotor_stagger_deg']:.1f} deg, camber={p['rotor_camber_deg']:.1f} deg")
+    print(f"  Zweifel = {p['zweifel']:.3f}")
+```
+
+### Key turbine physics
+
+- **Expansion ratio** (ER = P_in/P_out > 1) — analogous to compressor pressure ratio
+- **Loading coefficient** psi = 1.0–2.5 (much higher than compressor 0.3–0.5)
+- **Zweifel loading** — optimal 0.8–1.0; values > 1.2 indicate overloaded blading
+- **Soderberg loss** — simpler loss model, standard for turbine preliminary design
+- **NGV (nozzle guide vane)** comes first — accelerates and turns flow before rotor
+
+### Generate an HTML report
+
+```python
+from astraturbo.reports import generate_report, ReportConfig
+generate_report(
+    config=ReportConfig(title="HP Turbine — ER 2.5", output_path="turbine_report.html"),
+    turbine_result=result,
+)
+```
+
+### From the GUI
+
+**Compute > Turbine Meanline...** — enter expansion ratio, mass flow, RPM,
+hub/tip radii, and inlet temperature. Optionally save an HTML report.
+
+---
+
 ## Tutorial 7: Set Up a CFD Case
 
 ### OpenFOAM
