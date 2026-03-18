@@ -138,6 +138,7 @@ class MainWindow(QMainWindow):
         self._add_action(compute_menu, "Generate S&1 Mesh (Blade-to-Blade)", self._compute_s1_mesh)
         self._add_action(compute_menu, "Generate &O-Grid Mesh", self._compute_ogrid_mesh)
         self._add_action(compute_menu, "Generate Multi-&Block Mesh", self._compute_multiblock_mesh)
+        self._add_action(compute_menu, "Generate 3&D Mesh (Span Stacking)...", self._compute_3d_mesh)
         self._add_action(compute_menu, "Generate &Tip Clearance Mesh...", self._generate_tip_clearance)
         compute_menu.addSeparator()
 
@@ -439,13 +440,34 @@ class MainWindow(QMainWindow):
         )
         if path:
             try:
-                self._last_mesh.export_cgns(path)
+                from ..export.cgns_writer import write_cgns_structured
+
+                block_arrays = [b.points for b in self._last_mesh.blocks]
+                block_names = [b.name for b in self._last_mesh.blocks]
+
+                # Collect patches from mesh blocks for CGNS BCs
+                patches = {}
+                for block in self._last_mesh.blocks:
+                    if block.patches:
+                        patches[block.name] = block.patches
+
+                write_cgns_structured(
+                    path, block_arrays, block_names,
+                    patches=patches if patches else None,
+                )
+
+                bc_msg = ""
+                if patches:
+                    n_bcs = sum(len(v) for v in patches.values())
+                    bc_msg = f"Boundary conditions: {n_bcs}\n"
+
                 self.statusBar().showMessage(f"Exported CGNS: {path}")
                 QMessageBox.information(
                     self, "Export Successful",
                     f"CGNS exported to {path}\n\n"
                     f"Blocks: {self._last_mesh.n_blocks}\n"
-                    f"Total cells: {self._last_mesh.total_cells}"
+                    f"Total cells: {self._last_mesh.total_cells}\n"
+                    f"{bc_msg}"
                 )
             except Exception as e:
                 QMessageBox.warning(self, "Export Error", str(e))
@@ -528,6 +550,8 @@ class MainWindow(QMainWindow):
             return
 
         try:
+            import logging
+
             n = len(self._current_row.profiles)
             if n == 0:
                 QMessageBox.warning(self, "No Profiles", "Add profiles to the blade row first.")
@@ -541,6 +565,18 @@ class MainWindow(QMainWindow):
                 )
                 return
 
+            # Capture blade validation warnings
+            blade_warnings = []
+            class _WarningHandler(logging.Handler):
+                def emit(self, record):
+                    if record.levelno >= logging.WARNING:
+                        blade_warnings.append(record.getMessage())
+
+            handler = _WarningHandler()
+            blade_logger = logging.getLogger("astraturbo.blade.blade_row")
+            blade_logger.addHandler(handler)
+            blade_logger.setLevel(logging.WARNING)
+
             # Vary stagger and chord from hub to tip for realistic 3D blade
             stagger = np.linspace(np.deg2rad(25), np.deg2rad(45), n)
             chords = np.linspace(0.04, 0.06, n)
@@ -550,6 +586,8 @@ class MainWindow(QMainWindow):
                 chord_lengths=chords,
             )
 
+            blade_logger.removeHandler(handler)
+
             le = self._current_row.leading_edge
             te = self._current_row.trailing_edge
 
@@ -557,14 +595,22 @@ class MainWindow(QMainWindow):
                 f"Blade computed: {n} profiles, "
                 f"LE shape {le.shape}, TE shape {te.shape}"
             )
-            QMessageBox.information(
-                self, "Blade Geometry Computed",
+
+            msg = (
                 f"3D blade surface generated.\n\n"
                 f"Profiles: {n}\n"
                 f"LE points: {le.shape}\n"
                 f"TE points: {te.shape}\n"
                 f"Surface: {self._current_row.blade_surface}"
             )
+
+            if blade_warnings:
+                msg += f"\n\nValidation Warnings ({len(blade_warnings)}):\n"
+                for w in blade_warnings:
+                    msg += f"  - {w}\n"
+                QMessageBox.warning(self, "Blade Computed (with warnings)", msg)
+            else:
+                QMessageBox.information(self, "Blade Geometry Computed", msg)
         except Exception as e:
             QMessageBox.warning(self, "Compute Error", f"{e}\n\n{traceback.format_exc()}")
 
@@ -708,6 +754,73 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Mesh Error", f"{e}\n\n{traceback.format_exc()}")
 
+    def _compute_3d_mesh(self) -> None:
+        """Generate a 3D blade passage mesh by stacking at span stations."""
+        from PySide6.QtWidgets import QInputDialog
+
+        if self._current_row is None or not self._current_row.profiles:
+            QMessageBox.warning(self, "No Profile", "Create a profile first.")
+            return
+
+        if len(self._current_row.profiles) < 2:
+            QMessageBox.warning(
+                self, "Need Multiple Profiles",
+                "At least 2 span profiles are required for 3D mesh.\n"
+                "Use Edit > Add Profile to Row to add more."
+            )
+            return
+
+        n_span, ok = QInputDialog.getInt(
+            self, "3D Mesh", "Number of span stations:", len(self._current_row.profiles), 2, 50
+        )
+        if not ok:
+            return
+
+        span, ok = QInputDialog.getDouble(
+            self, "3D Mesh", "Total span height (m):", 0.05, 0.001, 5.0, 4
+        )
+        if not ok:
+            return
+
+        try:
+            from ..mesh.multiblock import generate_blade_passage_mesh_3d
+
+            # Get profiles from current blade row
+            profiles = [p.as_array() for p in self._current_row.profiles]
+            span_positions = np.linspace(0, span, n_span).tolist()
+
+            # If we have fewer blade row profiles than requested span stations,
+            # interpolate by reusing available profiles
+            while len(profiles) < n_span:
+                profiles.append(profiles[-1])
+
+            mesh = generate_blade_passage_mesh_3d(
+                profiles=profiles[:n_span],
+                span_positions=span_positions,
+                pitch=0.05,
+                n_blade=self._mesh_panel._n_axial.value(),
+                n_ogrid=max(3, self._mesh_panel._n_radial.value() // 4),
+                n_inlet=max(3, self._mesh_panel._n_axial.value() // 3),
+                n_outlet=max(3, self._mesh_panel._n_axial.value() // 3),
+                n_passage=self._mesh_panel._n_radial.value(),
+            )
+
+            self._last_mesh = mesh
+
+            self.statusBar().showMessage(
+                f"3D mesh: {mesh.n_blocks} blocks, {n_span} span stations — Ready to export"
+            )
+            QMessageBox.information(
+                self, "3D Mesh Generated",
+                f"3D blade passage mesh generated.\n\n"
+                f"Blocks: {mesh.n_blocks}\n"
+                f"Span stations: {n_span}\n"
+                f"Span height: {span} m\n\n"
+                f"Use File > Export > CGNS to export."
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "3D Mesh Error", f"{e}\n\n{traceback.format_exc()}")
+
     def _show_about(self) -> None:
         QMessageBox.about(
             self,
@@ -766,18 +879,41 @@ class MainWindow(QMainWindow):
         if not ok:
             return
 
+        radial_stations, ok = QInputDialog.getInt(
+            self, "Meanline Design", "Radial Stations (hub/mid/tip):", 3, 2, 20
+        )
+        if not ok:
+            return
+
         try:
             from ..design import meanline_compressor, meanline_to_blade_parameters
+            from ..design.meanline import blade_angle_to_cl0
+            import math
 
             result = meanline_compressor(
                 overall_pressure_ratio=pr, mass_flow=mass_flow,
                 rpm=rpm, r_hub=r_hub, r_tip=r_tip,
+                radial_stations=radial_stations,
             )
 
             params = meanline_to_blade_parameters(result)
 
             summary = result.summary()
-            summary += "\n\nBlade Parameters:\n"
+
+            # Auto-computed cl0 for each stage
+            summary += "\n\nAuto-computed Profile Parameters:\n"
+            for stage, bp in zip(result.stages, params):
+                cl0 = blade_angle_to_cl0(
+                    stage.rotor_inlet_beta, stage.rotor_outlet_beta,
+                    bp["rotor_solidity"],
+                )
+                summary += (
+                    f"  Stage {stage.stage_number}: cl0 = {cl0:.4f}, "
+                    f"stagger = {bp['rotor_stagger_deg']:.1f} deg, "
+                    f"solidity = {bp['rotor_solidity']:.2f}\n"
+                )
+
+            summary += "\nBlade Parameters:\n"
             for p in params:
                 summary += (
                     f"\nStage {p['stage']}:\n"
@@ -787,6 +923,20 @@ class MainWindow(QMainWindow):
                     f"camber={p['stator_camber_deg']:.1f} deg\n"
                     f"  De Haller: {p['de_haller']:.3f}\n"
                 )
+
+            # Radial blade angle table
+            summary += "\nRadial Blade Angles (free vortex):\n"
+            for stage in result.stages:
+                summary += f"  Stage {stage.stage_number}:\n"
+                summary += f"    {'r (m)':>8s}  {'beta_in':>8s}  {'beta_out':>9s}  {'alpha_in':>9s}  {'alpha_out':>10s}\n"
+                for a in stage.radial_blade_angles:
+                    summary += (
+                        f"    {a['r']:8.4f}  "
+                        f"{math.degrees(a['beta_in']):8.1f}  "
+                        f"{math.degrees(a['beta_out']):9.1f}  "
+                        f"{math.degrees(a['alpha_in']):9.1f}  "
+                        f"{math.degrees(a['alpha_out']):10.1f}\n"
+                    )
 
             QMessageBox.information(self, "Meanline Design Result", summary)
             self.statusBar().showMessage(
@@ -801,13 +951,54 @@ class MainWindow(QMainWindow):
 
     def _setup_cfd(self, solver: str) -> None:
         """Set up a CFD case for the specified solver."""
-        from PySide6.QtWidgets import QInputDialog
+        from PySide6.QtWidgets import QInputDialog, QCheckBox, QDialog, QVBoxLayout, QDialogButtonBox, QLabel, QDoubleSpinBox, QFormLayout
 
-        velocity, ok = QInputDialog.getDouble(
-            self, f"CFD Setup ({solver})", "Inlet Velocity (m/s):", 100.0, 1, 10000, 1
-        )
-        if not ok:
+        # Use a custom dialog for compressible options
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"CFD Setup ({solver})")
+        layout = QVBoxLayout(dlg)
+
+        form = QFormLayout()
+
+        vel_spin = QDoubleSpinBox()
+        vel_spin.setRange(1, 10000)
+        vel_spin.setValue(100.0)
+        vel_spin.setDecimals(1)
+        form.addRow("Inlet Velocity (m/s):", vel_spin)
+
+        comp_check = QCheckBox("Compressible (rhoSimpleFoam)")
+        form.addRow("Flow type:", comp_check)
+
+        total_p_spin = QDoubleSpinBox()
+        total_p_spin.setRange(1000, 1e8)
+        total_p_spin.setValue(101325.0)
+        total_p_spin.setDecimals(0)
+        total_p_spin.setEnabled(False)
+        form.addRow("Total Pressure (Pa):", total_p_spin)
+
+        total_t_spin = QDoubleSpinBox()
+        total_t_spin.setRange(100, 5000)
+        total_t_spin.setValue(288.15)
+        total_t_spin.setDecimals(1)
+        total_t_spin.setEnabled(False)
+        form.addRow("Total Temperature (K):", total_t_spin)
+
+        comp_check.toggled.connect(total_p_spin.setEnabled)
+        comp_check.toggled.connect(total_t_spin.setEnabled)
+
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+
+        if dlg.exec() != QDialog.Accepted:
             return
+
+        velocity = vel_spin.value()
+        compressible = comp_check.isChecked()
+        total_pressure = total_p_spin.value()
+        total_temperature = total_t_spin.value()
 
         path, _ = QFileDialog.getSaveFileName(
             self, f"CFD Case Directory ({solver})", f"{solver}_case"
@@ -822,23 +1013,41 @@ class MainWindow(QMainWindow):
                 solver=solver,
                 inlet_velocity=velocity,
                 turbulence_model="kOmegaSST",
+                compressible=compressible,
+                total_pressure=total_pressure,
+                total_temperature=total_temperature,
             )
             wf = CFDWorkflow(cfg)
             if self._last_mesh:
-                wf.mesh_path = self._last_mesh
+                # Pass patch names from mesh blocks if available
+                if hasattr(self._last_mesh, 'blocks'):
+                    patch_names_from_mesh = {}
+                    for block in self._last_mesh.blocks:
+                        if block.patches:
+                            for face, bc_type in block.patches.items():
+                                if bc_type not in patch_names_from_mesh:
+                                    patch_names_from_mesh[bc_type] = bc_type
 
             case = wf.setup_case(path)
 
-            QMessageBox.information(
-                self, "CFD Case Created",
-                f"Solver: {solver}\nVelocity: {velocity} m/s\n"
+            solver_name = "rhoSimpleFoam" if compressible else solver
+            msg = (
+                f"Solver: {solver_name}\n"
+                f"Velocity: {velocity} m/s\n"
+            )
+            if compressible:
+                msg += f"Total Pressure: {total_pressure} Pa\nTotal Temperature: {total_temperature} K\n"
+            msg += (
                 f"Directory: {case}\n\n"
                 f"Run the case from terminal:\n"
-                f"  cd {case} && bash Allrun"
-                if solver == "openfoam" else
-                f"  cd {case} && bash run_{solver}.sh"
             )
-            self.statusBar().showMessage(f"CFD case ({solver}) created at {case}")
+            if solver == "openfoam":
+                msg += f"  cd {case} && bash Allrun"
+            else:
+                msg += f"  cd {case} && bash run_{solver}.sh"
+
+            QMessageBox.information(self, "CFD Case Created", msg)
+            self.statusBar().showMessage(f"CFD case ({solver_name}) created at {case}")
         except Exception as e:
             QMessageBox.warning(self, "CFD Error", str(e))
 

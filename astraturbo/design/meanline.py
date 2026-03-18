@@ -105,6 +105,9 @@ class StageResult:
     stator_inlet_alpha: float = 0.0     # Absolute inlet angle (rad)
     stator_outlet_alpha: float = 0.0    # Absolute outlet angle (rad)
 
+    # Radial distribution of blade angles (free vortex)
+    radial_blade_angles: list[dict] = field(default_factory=list)
+
     def blade_angles_deg(self) -> dict:
         """Return all blade metal angles in degrees for geometry input."""
         return {
@@ -147,6 +150,25 @@ class MeanlineResult:
             lines.append(f"    Stator alpha: {angles['stator_inlet_alpha']:.1f} → {angles['stator_outlet_alpha']:.1f} deg")
             lines.append(f"    De Haller: {s.rotor_triangles.de_haller_ratio:.3f}")
         return "\n".join(lines)
+
+
+def blade_angle_to_cl0(beta_in: float, beta_out: float, solidity: float) -> float:
+    """Convert blade angles to lift coefficient using Lieblein relation.
+
+    Args:
+        beta_in: Inlet blade angle (radians).
+        beta_out: Outlet blade angle (radians).
+        solidity: Blade solidity (chord / pitch).
+
+    Returns:
+        Approximate lift coefficient cl0 for the camber line.
+    """
+    beta_mean = (beta_in + beta_out) / 2.0
+    cos_beta_mean = math.cos(beta_mean)
+    if abs(cos_beta_mean) < 1e-10 or abs(solidity) < 1e-10:
+        return 1.0
+    cl0 = 2.0 * (math.tan(beta_in) - math.tan(beta_out)) / solidity * cos_beta_mean
+    return abs(cl0)
 
 
 def meanline_compressor_stage(
@@ -261,6 +283,7 @@ def meanline_compressor(
     gas: GasProperties | None = None,
     T_inlet: float = 288.15,
     P_inlet: float = 101325.0,
+    radial_stations: int = 3,
 ) -> MeanlineResult:
     """Design a multi-stage axial compressor from top-level requirements.
 
@@ -280,6 +303,7 @@ def meanline_compressor(
         gas: Gas properties.
         T_inlet: Inlet total temperature (K).
         P_inlet: Inlet total pressure (Pa).
+        radial_stations: Number of radial stations (default 3: hub, mid, tip).
 
     Returns:
         MeanlineResult with all stages, stations, and performance.
@@ -339,6 +363,38 @@ def meanline_compressor(
             reaction=reaction, gas=gas, T_in=T_current, P_in=P_current,
         )
         stage.stage_number = i + 1
+
+        # Compute radial blade angles via free-vortex (simple radial equilibrium)
+        radial_positions = np.linspace(r_hub, r_tip, max(radial_stations, 2))
+        C_theta_in_mean = stage.rotor_triangles.inlet.C_theta
+        C_theta_out_mean = stage.rotor_triangles.outlet.C_theta
+        omega_val = omega
+        radial_angles = []
+        for r in radial_positions:
+            # Free vortex: C_theta(r) = C_theta_mean * r_mean / r
+            ratio = r_mean / r if abs(r) > 1e-10 else 1.0
+            C_theta_in_r = C_theta_in_mean * ratio
+            C_theta_out_r = C_theta_out_mean * ratio
+            U_r = omega_val * r
+
+            # Relative angles at this radius
+            W_theta_in = C_theta_in_r - U_r
+            W_theta_out = C_theta_out_r - U_r
+            beta_in_r = math.atan2(W_theta_in, C_axial)
+            beta_out_r = math.atan2(W_theta_out, C_axial)
+
+            # Absolute angles
+            alpha_in_r = math.atan2(C_theta_in_r, C_axial)
+            alpha_out_r = math.atan2(C_theta_out_r, C_axial)
+
+            radial_angles.append({
+                "r": float(r),
+                "beta_in": beta_in_r,
+                "beta_out": beta_out_r,
+                "alpha_in": alpha_in_r,
+                "alpha_out": alpha_out_r,
+            })
+        stage.radial_blade_angles = radial_angles
         stage_results.append(stage)
 
         # Update conditions for next stage

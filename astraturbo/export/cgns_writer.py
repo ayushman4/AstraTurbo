@@ -23,6 +23,7 @@ def write_cgns_structured(
     blocks: list[NDArray[np.float64]],
     block_names: list[str] | None = None,
     base_name: str = "AstraTurbo",
+    patches: dict[str, dict[str, str]] | None = None,
 ) -> None:
     """Write structured mesh blocks to a CGNS-HDF5 file.
 
@@ -32,6 +33,7 @@ def write_cgns_structured(
             For 2D blocks (Ni, Nj, 2), z-coordinates are set to 0.
         block_names: Optional names for each block.
         base_name: Name of the CGNS base.
+        patches: Optional dict of zone_name -> {face_name: bc_type} for writing BCs.
     """
     filepath = Path(filepath)
     n_blocks = len(blocks)
@@ -60,6 +62,13 @@ def write_cgns_structured(
 
         for idx, (block, name) in enumerate(zip(blocks, block_names)):
             _write_zone(base, block, name)
+
+        # Write boundary conditions if patches provided
+        if patches:
+            for zone_name, zone_patches in patches.items():
+                if zone_name in base:
+                    zone_grp = base[zone_name]
+                    write_cgns_boundary_conditions(zone_grp, zone_patches)
 
 
 def _write_zone(
@@ -170,3 +179,73 @@ def write_cgns_2d(
                             " data",
                             data=field_arrays[zone_idx].astype(np.float64),
                         )
+
+
+# ── CGNS Boundary Condition Writers ──────────────────────────
+
+
+# Mapping from logical BC names to CGNS BC types
+_CGNS_BC_TYPE_MAP = {
+    "inlet": "BCInflowSubsonic",
+    "outlet": "BCOutflowSubsonic",
+    "blade": "BCWallViscous",
+    "hub": "BCWallViscous",
+    "shroud": "BCWallViscous",
+    "periodic_upper": "BCSymmetryPlane",
+    "periodic_lower": "BCSymmetryPlane",
+    "periodic": "BCSymmetryPlane",
+}
+
+
+def write_cgns_boundary_conditions(
+    zone_group: h5py.Group,
+    patch_map: dict[str, str],
+) -> None:
+    """Write ZoneBC nodes to a CGNS zone.
+
+    Args:
+        zone_group: h5py group for the zone.
+        patch_map: Dict mapping face names to BC types.
+            Keys: face names (e.g. "bottom", "top", "left", "right")
+            Values: logical BC types (e.g. "inlet", "outlet", "blade")
+    """
+    zonebc = zone_group.create_group("ZoneBC")
+    zonebc.attrs["label"] = np.bytes_("ZoneBC_t")
+
+    for face_name, bc_logical in patch_map.items():
+        cgns_type = _CGNS_BC_TYPE_MAP.get(bc_logical, "BCGeneral")
+
+        bc_node = zonebc.create_group(face_name)
+        bc_node.attrs["label"] = np.bytes_("BC_t")
+        bc_node.create_dataset(" data", data=np.bytes_(cgns_type))
+
+        # GridLocation node
+        gl = bc_node.create_group("GridLocation")
+        gl.attrs["label"] = np.bytes_("GridLocation_t")
+        gl.create_dataset(" data", data=np.bytes_("FaceCenter"))
+
+
+def write_cgns_connectivity(
+    zone_group: h5py.Group,
+    donor_zone_name: str,
+    transform: list[int] | None = None,
+) -> None:
+    """Write inter-block 1-to-1 connectivity to a CGNS zone.
+
+    Args:
+        zone_group: h5py group for the zone.
+        donor_zone_name: Name of the donor (connected) zone.
+        transform: Short-form transformation indices (default: [1, 2, 3] = identity).
+    """
+    if transform is None:
+        transform = [1, 2, 3]
+
+    conn_name = f"conn_{donor_zone_name}"
+    conn = zone_group.create_group(conn_name)
+    conn.attrs["label"] = np.bytes_("GridConnectivity1to1_t")
+    conn.create_dataset(" data", data=np.bytes_(donor_zone_name))
+
+    # Transform
+    tr = conn.create_group("Transform")
+    tr.attrs["label"] = np.bytes_("\"int[IndexDimension]\"")
+    tr.create_dataset(" data", data=np.array(transform, dtype=np.int32))

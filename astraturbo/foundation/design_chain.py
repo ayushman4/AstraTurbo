@@ -88,7 +88,7 @@ class DesignChain:
     """
 
     # Stage ordering for dependency tracking
-    STAGES = ["meanline", "profile", "blade", "mesh", "export"]
+    STAGES = ["meanline", "profile", "blade", "mesh", "export", "cfd"]
 
     # Map of which parameters affect which stages
     PARAM_STAGE_MAP: dict[str, str] = {
@@ -122,6 +122,12 @@ class DesignChain:
         # Export parameters
         "export_format": "export",
         "export_path": "export",
+        # CFD parameters
+        "cfd_solver": "cfd",
+        "cfd_compressible": "cfd",
+        "cfd_total_pressure": "cfd",
+        "cfd_total_temperature": "cfd",
+        "cfd_output": "cfd",
     }
 
     # Type alias for stage functions
@@ -135,11 +141,13 @@ class DesignChain:
             "blade": self._run_blade,
             "mesh": self._run_mesh,
             "export": self._run_export,
+            "cfd": self._run_cfd,
         }
         self._last_result: ChainResult | None = None
         self._stage_results: dict[str, StageResult] = {}
         self._dirty_stages: set[str] = set(self.STAGES)  # All dirty initially
         self._callbacks: list[Callable[[ChainResult], None]] = []
+        self._user_set_params: set[str] = set()  # Params explicitly set by user
 
         # Connect to AstraTurbo signal system
         property_changed.connect(self._on_property_changed)
@@ -177,6 +185,12 @@ class DesignChain:
             # Export
             "export_format": "vtk",
             "export_path": "",
+            # CFD
+            "cfd_solver": "openfoam",
+            "cfd_compressible": False,
+            "cfd_total_pressure": 101325.0,
+            "cfd_total_temperature": 288.15,
+            "cfd_output": "",
         }
 
     def _on_property_changed(self, sender: Any, **kwargs: Any) -> None:
@@ -207,6 +221,7 @@ class DesignChain:
             ChainResult if auto_run is True, else None.
         """
         self._parameters[name] = value
+        self._user_set_params.add(name)
 
         # Determine first affected stage
         affected_stage = self.PARAM_STAGE_MAP.get(name, "profile")
@@ -411,73 +426,99 @@ class DesignChain:
     ) -> dict[str, Any]:
         """Meanline analysis: compute velocity triangles and thermodynamics."""
         _ = prev  # Meanline is the first stage, no predecessors
-        gamma = 1.4
-        cp = 1004.5
-        R_gas = 287.058
-        T01 = 288.15
-        P01 = 101325.0
+        from ..design.meanline import (
+            meanline_compressor,
+            meanline_to_blade_parameters,
+            blade_angle_to_cl0,
+        )
 
         pr = params["pressure_ratio"]
+        mass_flow = params["mass_flow"]
         rpm = params["rpm"]
         htr = params["hub_tip_ratio"]
-        psi = params["work_coefficient"]
-        phi = params["flow_coefficient"]
-        _ = params["degree_of_reaction"]  # Reserved for future radial equilibrium
-        _ = params["mass_flow"]  # Reserved for mass flow check
+        reaction = params["degree_of_reaction"]
 
-        # Isentropic temperature rise for the given PR
-        T_ratio = pr ** ((gamma - 1.0) / gamma)
-        T02s = T01 * T_ratio
-        delta_T0s = T02s - T01
-
-        # Assume efficiency
+        # Estimate radii from hub-tip ratio and RPM
+        # Use work/flow coefficients to get blade speed first
+        gamma = 1.4
+        cp = 1004.5
+        T01 = 288.15
+        P01 = 101325.0
         eta = 0.88
-        delta_T0 = delta_T0s / eta
-        T02 = T01 + delta_T0
 
-        # Work per unit mass
+        T_ratio = pr ** ((gamma - 1.0) / gamma)
+        delta_T0s = T01 * T_ratio - T01
+        delta_T0 = delta_T0s / eta
         work = cp * delta_T0
 
-        # Blade speed from work coefficient: psi = delta_h0 / U^2
+        psi = params["work_coefficient"]
+        phi = params["flow_coefficient"]
         U = np.sqrt(work / psi) if psi > 1e-10 else 300.0
-
-        # Axial velocity from flow coefficient: phi = V_ax / U
-        V_ax = phi * U
-
-        # Radii
         omega = rpm * 2.0 * np.pi / 60.0
         r_mean = U / omega if omega > 1e-10 else 0.3
-
         r_tip = r_mean / np.sqrt(0.5 * (1.0 + htr**2))
         r_hub = htr * r_tip
 
-        # Annulus area
+        ml_result = meanline_compressor(
+            overall_pressure_ratio=pr,
+            mass_flow=mass_flow,
+            rpm=rpm,
+            r_hub=r_hub,
+            r_tip=r_tip,
+            n_stages=params.get("n_stages", 1),
+            reaction=reaction,
+            T_inlet=T01,
+            P_inlet=P01,
+        )
+
+        blade_params = meanline_to_blade_parameters(ml_result)
+
+        # Auto-compute cl0 from first stage rotor angles
+        stage0 = ml_result.stages[0]
+        solidity = blade_params[0]["rotor_solidity"] if blade_params else 1.0
+        cl0 = blade_angle_to_cl0(
+            stage0.rotor_inlet_beta, stage0.rotor_outlet_beta, solidity
+        )
+
+        # Auto-set stagger angle and chord from meanline output
+        stagger_deg = blade_params[0]["rotor_stagger_deg"] if blade_params else 30.0
+        # Estimate chord from solidity and pitch
         area = np.pi * (r_tip**2 - r_hub**2)
+        n_blades = params.get("n_blades", 20)
+        pitch = 2.0 * np.pi * r_mean / n_blades
+        chord = solidity * pitch
 
-        # Inlet density
-        rho_inlet = P01 / (R_gas * T01)
+        # Push derived values into params for downstream stages
+        # Only auto-set if user hasn't explicitly overridden them
+        if "cl0" not in self._user_set_params:
+            self._parameters["cl0"] = cl0
+        if "stagger_angle" not in self._user_set_params:
+            self._parameters["stagger_angle"] = stagger_deg
+        if "chord" not in self._user_set_params:
+            self._parameters["chord"] = chord
 
-        # Flow angles from reaction
-        # R = 1 - (tan(alpha1) + tan(alpha2)) / (2*U/V_ax)
-        # With zero inlet swirl (alpha1=0):
-        # delta_V_theta = work / U
+        # Build compatible output dict
+        V_ax = ml_result.stations[0].C_axial if ml_result.stations else phi * U
         delta_V_theta = work / U if abs(U) > 1e-10 else 0.0
         alpha2 = np.degrees(np.arctan2(delta_V_theta, V_ax))
         beta1 = np.degrees(np.arctan2(-U, V_ax))
         beta2 = np.degrees(np.arctan2(delta_V_theta - U, V_ax))
 
         return {
+            "meanline_result": ml_result,
+            "blade_params": blade_params,
+            "cl0": cl0,
             "work": work,
             "U": U,
-            "V_ax": V_ax,
-            "r_mean": r_mean,
-            "r_hub": r_hub,
-            "r_tip": r_tip,
-            "omega": omega,
-            "area": area,
-            "rho_inlet": rho_inlet,
+            "V_ax": float(V_ax),
+            "r_mean": float(r_mean),
+            "r_hub": float(r_hub),
+            "r_tip": float(r_tip),
+            "omega": float(omega),
+            "area": float(area),
+            "rho_inlet": P01 / (287.058 * T01),
             "delta_T0": delta_T0,
-            "T02": T02,
+            "T02": T01 + delta_T0,
             "P02": P01 * pr,
             "alpha1": 0.0,
             "alpha2": alpha2,
@@ -485,6 +526,8 @@ class DesignChain:
             "beta2": beta2,
             "delta_V_theta": delta_V_theta,
             "efficiency": eta,
+            "stagger_deg": stagger_deg,
+            "chord": chord,
         }
 
     def _run_profile(
@@ -493,14 +536,21 @@ class DesignChain:
         prev: dict[str, StageResult],
     ) -> dict[str, Any]:
         """Generate 2D airfoil profile."""
-        _ = prev  # Profile doesn't depend on meanline results yet
         from ..camberline import create_camberline
         from ..thickness import create_thickness
         from ..profile import Superposition
 
+        # Read cl0: prefer user-set value, fall back to meanline auto-computed, then default
+        meanline_result = prev.get("meanline")
+        if "cl0" in self._user_set_params:
+            cl0 = params.get("cl0", 1.0)
+        elif meanline_result and meanline_result.success and "cl0" in meanline_result.data:
+            cl0 = meanline_result.data["cl0"]
+        else:
+            cl0 = params.get("cl0", 1.0)
+
         camber_type = params.get("camber_type", "naca65")
         thickness_type = params.get("thickness_type", "naca65")
-        cl0 = params.get("cl0", 1.0)
         max_thickness = params.get("max_thickness", 0.1)
         sample_rate = params.get("sample_rate", 80)
 
@@ -546,8 +596,25 @@ class DesignChain:
             raise ValueError("Profile stage must succeed before blade stage")
 
         profile_pts = profile_result.data["points"]
-        stagger = np.radians(params.get("stagger_angle", 30.0))
-        chord = params.get("chord", 0.05)
+
+        # Read stagger and chord: prefer user-set, fall back to meanline auto-computed
+        meanline_result = prev.get("meanline")
+        if "stagger_angle" in self._user_set_params:
+            stagger = np.radians(params.get("stagger_angle", 30.0))
+        elif meanline_result and meanline_result.success:
+            stagger = np.radians(meanline_result.data.get(
+                "stagger_deg", params.get("stagger_angle", 30.0)
+            ))
+        else:
+            stagger = np.radians(params.get("stagger_angle", 30.0))
+
+        if "chord" in self._user_set_params:
+            chord = params.get("chord", 0.05)
+        elif meanline_result and meanline_result.success:
+            chord = meanline_result.data.get("chord", params.get("chord", 0.05))
+        else:
+            chord = params.get("chord", 0.05)
+
         span = params.get("span", 0.05)
         n_profiles = params.get("n_profiles", 3)
 
@@ -672,3 +739,36 @@ class DesignChain:
             return {"exported": True, "path": export_path, "format": export_format}
         except Exception as e:
             return {"exported": False, "reason": str(e)}
+
+    def _run_cfd(
+        self,
+        params: dict[str, Any],
+        prev: dict[str, StageResult],
+    ) -> dict[str, Any]:
+        """Set up CFD case from mesh and flow conditions."""
+        cfd_output = params.get("cfd_output", "")
+        if not cfd_output:
+            return {"setup": False, "reason": "No CFD output path specified"}
+
+        from ..cfd.workflow import CFDWorkflow, CFDWorkflowConfig
+
+        compressible = params.get("cfd_compressible", False)
+        cfg = CFDWorkflowConfig(
+            solver=params.get("cfd_solver", "openfoam"),
+            compressible=compressible,
+        )
+        if compressible:
+            cfg.total_pressure = params.get("cfd_total_pressure", 101325.0)
+            cfg.total_temperature = params.get("cfd_total_temperature", 288.15)
+
+        wf = CFDWorkflow(cfg)
+
+        # Use exported mesh if available
+        export_result = prev.get("export")
+        if export_result and export_result.success:
+            exported_path = export_result.data.get("path", "")
+            if exported_path:
+                wf.set_mesh(exported_path)
+
+        case_dir = wf.setup_case(cfd_output)
+        return {"setup": True, "case_dir": str(case_dir)}

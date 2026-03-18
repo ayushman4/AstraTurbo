@@ -1,0 +1,67 @@
+{
+    "source": "Reid & Moore, NASA TP-1138 (1978); Suder, NASA TM-107240 (1996); Dunham, AGARD AR-355 (1998)",
+    "description": "NASA Rotor 37 — transonic axial compressor rotor, standard CFD validation case",
+
+    "design_point": {
+        "rpm": 17188.7,
+        "mass_flow_kg_s": 20.19,
+        "total_pressure_ratio": 2.106,
+        "adiabatic_efficiency": 0.877,
+        "choking_mass_flow_kg_s": 20.93,
+        "measured_peak_efficiency": 0.876,
+        "mass_flow_at_peak_efficiency_kg_s": 20.51
+    },
+
+    "geometry": {
+        "n_blades": 36,
+        "hub_radius_inlet_m": 0.17803,
+        "tip_radius_inlet_m": 0.25227,
+        "hub_radius_outlet_m": 0.18845,
+        "tip_radius_outlet_m": 0.25227,
+        "hub_tip_ratio_inlet": 0.70,
+        "hub_tip_ratio_outlet": 0.75,
+        "tip_speed_m_s": 454.1,
+        "tip_clearance_m": 0.000356,
+        "axial_chord_midspan_m": 0.026,
+        "true_chord_midspan_m": 0.056,
+        "blade_aspect_ratio": 1.19,
+        "solidity_hub": 1.56,
+        "solidity_midspan": 1.29,
+        "solidity_tip": 1.10
+    },
+
+    "inlet_conditions": {
+        "total_temperature_K": 288.15,
+        "total_pressure_Pa": 101325.0,
+        "axial_mach_number": 0.48,
+        "inlet_tip_relative_mach": 1.48,
+        "inlet_hub_relative_mach": 1.13
+    },
+
+    "blade_metal_angles_deg_from_axial": {
+        "hub":     {"inlet": 61.2, "outlet": 46.2, "camber": 15.0},
+        "midspan": {"inlet": 56.5, "outlet": 40.3, "camber": 16.2},
+        "tip":     {"inlet": 64.5, "outlet": 56.5, "camber":  8.0}
+    },
+
+    "flow_angles_deg_from_axial": {
+        "hub":     {"inlet_relative": 58, "outlet_relative": 40},
+        "midspan": {"inlet_relative": 53, "outlet_relative": 35},
+        "tip":     {"inlet_relative": 62, "outlet_relative": 52}
+    },
+
+    "radial_profiles_design_speed": {
+        "description": "Spanwise distributions at near-peak-efficiency, 100% speed. Span fraction measured from hub.",
+        "span_fraction_from_hub":    [0.05, 0.10, 0.30, 0.50, 0.70, 0.80, 0.90, 0.95],
+        "total_pressure_ratio":      [1.94, 2.00, 2.10, 2.14, 2.18, 2.15, 2.12, 2.10],
+        "adiabatic_efficiency":      [0.82, 0.85, 0.90, 0.93, 0.92, 0.90, 0.88, 0.84]
+    },
+
+    "notes": [
+        "Blade profiles are multiple-circular-arc (MCA), not NACA series",
+        "Rotor 37 is transonic — inlet tip relative Mach 1.48",
+        "Meanline analysis will underpredict losses from shock and tip leakage",
+        "Radial profile values are approximate readings from published figures",
+        "Exact tabulated data available in AGARD AR-355 dataset"
+    ]
+}

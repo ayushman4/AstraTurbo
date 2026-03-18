@@ -15,6 +15,7 @@ to CGNS.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -458,4 +459,132 @@ def generate_blade_passage_mesh(
         patches={"right": "outlet", "bottom": "periodic_lower"},
     )
 
-    return gen.generate()
+    mesh = gen.generate()
+
+    # Run quality checks and log warnings
+    _logger = logging.getLogger(__name__)
+    from .quality import mesh_quality_report
+    for block in mesh.blocks:
+        report = mesh_quality_report(block.points)
+        if report.get("aspect_ratio_max", 0) > 100:
+            _logger.warning(
+                "Block '%s': max aspect ratio %.1f exceeds threshold of 100",
+                block.name, report["aspect_ratio_max"],
+            )
+        if report.get("skewness_max", 0) > 0.95:
+            _logger.warning(
+                "Block '%s': max skewness %.3f exceeds threshold of 0.95",
+                block.name, report["skewness_max"],
+            )
+
+    return mesh
+
+
+def generate_blade_passage_mesh_3d(
+    profiles: list[NDArray[np.float64]],
+    span_positions: list[float],
+    pitch: float,
+    n_blade: int = 40,
+    n_ogrid: int = 10,
+    n_inlet: int = 15,
+    n_outlet: int = 15,
+    n_passage: int = 20,
+    ogrid_thickness: float = 0.01,
+    grading_ogrid: float = 1.3,
+    grading_inlet: float = 0.5,
+    grading_outlet: float = 2.0,
+) -> MultiBlockMesh:
+    """Generate a 3D blade passage mesh by stacking 2D meshes at span stations.
+
+    Takes 2D profiles at different span stations, generates a 2D mesh at each
+    station, then stacks them with interpolation in the span direction.
+
+    Args:
+        profiles: List of (N, 2) closed 2D blade profiles at different span stations.
+        span_positions: List of span coordinates (z-values) for each profile.
+        pitch: Blade-to-blade pitch.
+        n_blade: Cells around blade.
+        n_ogrid: O-grid cells.
+        n_inlet: Inlet cells.
+        n_outlet: Outlet cells.
+        n_passage: Passage pitchwise cells.
+        ogrid_thickness: O-grid layer thickness.
+        grading_ogrid: O-grid grading.
+        grading_inlet: Inlet grading.
+        grading_outlet: Outlet grading.
+
+    Returns:
+        MultiBlockMesh with 3D blocks (Ni, Nj, Nk, 3).
+    """
+    logger = logging.getLogger(__name__)
+
+    if len(profiles) != len(span_positions):
+        raise ValueError("Number of profiles must match number of span positions")
+    if len(profiles) < 2:
+        raise ValueError("At least 2 span stations required for 3D mesh")
+
+    # Generate 2D mesh at each span station
+    meshes_2d = []
+    for i, profile in enumerate(profiles):
+        mesh_2d = generate_blade_passage_mesh(
+            profile=profile,
+            pitch=pitch,
+            n_blade=n_blade,
+            n_ogrid=n_ogrid,
+            n_inlet=n_inlet,
+            n_outlet=n_outlet,
+            n_passage=n_passage,
+            ogrid_thickness=ogrid_thickness,
+            grading_ogrid=grading_ogrid,
+            grading_inlet=grading_inlet,
+            grading_outlet=grading_outlet,
+        )
+        meshes_2d.append(mesh_2d)
+
+    # Stack 2D meshes into 3D blocks
+    # All meshes should have the same block structure
+    n_blocks = meshes_2d[0].n_blocks
+    n_span = len(span_positions)
+
+    mesh_3d = MultiBlockMesh(name="AstraTurbo_3D_Mesh")
+
+    for block_idx in range(n_blocks):
+        block_name = meshes_2d[0].blocks[block_idx].name
+        # Get the 2D block from each span station
+        blocks_at_stations = []
+        for mesh in meshes_2d:
+            if block_idx < len(mesh.blocks):
+                blocks_at_stations.append(mesh.blocks[block_idx].points)
+
+        if not blocks_at_stations:
+            continue
+
+        ni, nj = blocks_at_stations[0].shape[0], blocks_at_stations[0].shape[1]
+        dim_2d = blocks_at_stations[0].shape[2] if blocks_at_stations[0].ndim == 3 else 2
+
+        # Create 3D block: (Ni, Nj, Nk, 3)
+        nk = n_span
+        block_3d = np.zeros((ni, nj, nk, 3), dtype=np.float64)
+
+        for k, (pts_2d, z_pos) in enumerate(zip(blocks_at_stations, span_positions)):
+            block_3d[:, :, k, 0] = pts_2d[:, :, 0] if dim_2d >= 2 else pts_2d[:, :, 0]
+            block_3d[:, :, k, 1] = pts_2d[:, :, 1] if dim_2d >= 2 else 0.0
+            block_3d[:, :, k, 2] = z_pos
+
+        # If we have fewer mesh stations than span positions, interpolate
+        # (for now we require one mesh per span station)
+
+        structured = StructuredBlock(
+            name=block_name,
+            points=block_3d,
+            n_cells_i=ni - 1,
+            n_cells_j=nj - 1,
+            patches=meshes_2d[0].blocks[block_idx].patches,
+        )
+        mesh_3d.blocks.append(structured)
+
+    logger.info(
+        "Generated 3D mesh: %d blocks, %d total points, %d span stations",
+        mesh_3d.n_blocks, mesh_3d.total_points, n_span,
+    )
+    return mesh_3d

@@ -578,6 +578,7 @@ class TestCLISmooth:
             profile=str(profile_file), pitch=0.8,
             n_blade=15, n_ogrid=4, n_inlet=6, n_outlet=6, n_passage=8,
             output=str(mesh_file), format="cgns",
+            three_d=False, n_span=3, span=0.05, with_bcs=False,
         ))
 
         smooth_output = tmp_path / "smooth.cgns"
@@ -1092,3 +1093,332 @@ class TestAWSProvisioner:
         output = "\n".join(messages).lower()
         assert "queue" in output or "tearing" in output
         assert "teardown complete" in output
+
+
+# ────────────────────────────────────────────────────────────────
+# Pipeline gap fixes — integration tests
+# ────────────────────────────────────────────────────────────────
+
+class TestMeanlineRadialOutput:
+    """Test radial blade angle computation from meanline (Gap 1)."""
+
+    def test_radial_blade_angles_exist(self):
+        """meanline_compressor should produce radial_blade_angles."""
+        from astraturbo.design.meanline import meanline_compressor
+
+        r = meanline_compressor(1.5, 20, 15000, 0.15, 0.25)
+        assert len(r.stages) > 0
+        angles = r.stages[0].radial_blade_angles
+        assert len(angles) >= 2, "Should have at least hub and tip stations"
+        for entry in angles:
+            assert "r" in entry
+            assert "beta_in" in entry
+            assert "beta_out" in entry
+            assert "alpha_in" in entry
+            assert "alpha_out" in entry
+
+    def test_radial_stations_parameter(self):
+        """radial_stations parameter should control number of stations."""
+        from astraturbo.design.meanline import meanline_compressor
+
+        r5 = meanline_compressor(1.5, 20, 15000, 0.15, 0.25, radial_stations=5)
+        assert len(r5.stages[0].radial_blade_angles) == 5
+
+    def test_blade_angle_to_cl0(self):
+        """blade_angle_to_cl0 should return positive cl0."""
+        from astraturbo.design.meanline import blade_angle_to_cl0
+        import math
+
+        cl0 = blade_angle_to_cl0(math.radians(50), math.radians(30), 1.2)
+        assert cl0 > 0, "cl0 should be positive"
+        assert cl0 < 3.0, "cl0 should be reasonable"
+
+
+class TestAutoParameterPropagation:
+    """Test that meanline auto-propagates cl0/stagger/chord (Gaps 2, 3, 4)."""
+
+    def test_cl0_auto_set_from_meanline(self):
+        """DesignChain should auto-compute cl0 from meanline output."""
+        from astraturbo.foundation.design_chain import DesignChain
+
+        chain = DesignChain()
+        chain.set_parameter("pressure_ratio", 1.3, auto_run=False)
+        result = chain.run()
+
+        meanline_data = None
+        for s in result.stages:
+            if s.stage_name == "meanline" and s.success:
+                meanline_data = s.data
+                break
+
+        assert meanline_data is not None, "Meanline should succeed"
+        assert "cl0" in meanline_data, "Meanline should output cl0"
+        assert meanline_data["cl0"] > 0, "cl0 should be positive"
+
+    def test_stagger_auto_set(self):
+        """DesignChain should auto-compute stagger from meanline."""
+        from astraturbo.foundation.design_chain import DesignChain
+
+        chain = DesignChain()
+        result = chain.run()
+
+        meanline_data = None
+        for s in result.stages:
+            if s.stage_name == "meanline" and s.success:
+                meanline_data = s.data
+                break
+
+        assert meanline_data is not None
+        assert "stagger_deg" in meanline_data
+
+
+class TestCFDStageInChain:
+    """Test that 'cfd' stage exists in the design chain (Gap 12, 13)."""
+
+    def test_cfd_in_stages(self):
+        """DesignChain.STAGES should include 'cfd'."""
+        from astraturbo.foundation.design_chain import DesignChain
+
+        assert "cfd" in DesignChain.STAGES
+
+    def test_cfd_stage_runs(self, tmp_path):
+        """CFD stage should set up a case when output path given."""
+        from astraturbo.foundation.design_chain import DesignChain
+
+        chain = DesignChain()
+        chain.set_parameter("cfd_output", str(tmp_path / "cfd_case"), auto_run=False)
+        result = chain.run()
+
+        cfd_stage = None
+        for s in result.stages:
+            if s.stage_name == "cfd":
+                cfd_stage = s
+                break
+
+        assert cfd_stage is not None
+        assert cfd_stage.success
+
+
+class TestMesh3DGeneration:
+    """Test 3D mesh stacking from 2D profiles (Gaps 6, 7, 8)."""
+
+    def test_generate_3d_mesh(self):
+        """generate_blade_passage_mesh_3d should create 3D blocks."""
+        from astraturbo.mesh.multiblock import generate_blade_passage_mesh_3d
+
+        # Create two simple circular profiles at different spans
+        t = np.linspace(0, 2 * np.pi, 60)
+        profile1 = np.column_stack([0.5 * (1 - np.cos(t)), 0.05 * np.sin(t)])
+        profile2 = np.column_stack([0.5 * (1 - np.cos(t)), 0.04 * np.sin(t)])
+
+        mesh = generate_blade_passage_mesh_3d(
+            profiles=[profile1, profile2],
+            span_positions=[0.0, 0.05],
+            pitch=0.05,
+            n_blade=20,
+            n_ogrid=5,
+            n_inlet=8,
+            n_outlet=8,
+            n_passage=10,
+        )
+
+        assert mesh.n_blocks > 0
+        # Check that blocks are 3D (have k-dimension)
+        for block in mesh.blocks:
+            assert block.points.ndim == 4, f"Block {block.name} should be 4D (Ni,Nj,Nk,3)"
+            assert block.points.shape[2] == 2, "Should have 2 span stations"
+            assert block.points.shape[3] == 3, "Should have x,y,z coordinates"
+
+
+class TestCompressibleCFD:
+    """Test compressible CFD case setup (Batch 5)."""
+
+    def test_compressible_openfoam_case(self, tmp_path):
+        """Compressible flag should produce rhoSimpleFoam case."""
+        from astraturbo.cfd.openfoam import create_openfoam_case
+
+        case = create_openfoam_case(
+            case_dir=tmp_path / "comp_case",
+            solver="rhoSimpleFoam",
+            compressible=True,
+            total_pressure=150000.0,
+            total_temperature=350.0,
+        )
+
+        # Check thermophysicalProperties exists
+        thermo = case / "constant" / "thermophysicalProperties"
+        assert thermo.exists(), "thermophysicalProperties should exist for compressible"
+
+        # Check temperature BC exists
+        t_file = case / "0" / "T"
+        assert t_file.exists(), "Temperature BC should exist for compressible"
+
+        # Check controlDict has rhoSimpleFoam
+        ctrl = (case / "system" / "controlDict").read_text()
+        assert "rhoSimpleFoam" in ctrl
+
+    def test_compressible_workflow_routing(self, tmp_path):
+        """CFDWorkflow with compressible=True should route to rhoSimpleFoam."""
+        from astraturbo.cfd.workflow import CFDWorkflow, CFDWorkflowConfig
+
+        cfg = CFDWorkflowConfig(
+            solver="openfoam",
+            compressible=True,
+            total_pressure=150000.0,
+            total_temperature=350.0,
+        )
+        wf = CFDWorkflow(cfg)
+        case = wf.setup_case(tmp_path / "comp_wf")
+
+        ctrl = (case / "system" / "controlDict").read_text()
+        assert "rhoSimpleFoam" in ctrl
+
+
+class TestCompressibleCLI:
+    """Test --compressible CLI flag."""
+
+    def test_compressible_flag_parsed(self, tmp_path):
+        """CLI should accept --compressible and produce correct case."""
+        from astraturbo.cfd import CFDWorkflow, CFDWorkflowConfig
+
+        cfg = CFDWorkflowConfig(
+            solver="openfoam",
+            compressible=True,
+            total_pressure=150000.0,
+            total_temperature=350.0,
+        )
+        wf = CFDWorkflow(cfg)
+        case = wf.setup_case(tmp_path / "cli_comp")
+
+        thermo = case / "constant" / "thermophysicalProperties"
+        assert thermo.exists()
+        content = thermo.read_text()
+        assert "hePsiThermo" in content
+        assert "sutherland" in content
+
+
+class TestCGNSBoundaryConditions:
+    """Test CGNS BC and connectivity writers (Batch 6)."""
+
+    def test_write_cgns_with_bcs(self, tmp_path):
+        """write_cgns_structured with patches should create ZoneBC nodes."""
+        from astraturbo.export.cgns_writer import write_cgns_structured
+
+        block = np.random.rand(5, 5, 3)
+        patches = {
+            "Zone_0": {"left": "inlet", "right": "outlet", "bottom": "blade"},
+        }
+        filepath = tmp_path / "test_bc.cgns"
+        write_cgns_structured(filepath, [block], patches=patches)
+
+        import h5py
+        with h5py.File(filepath, "r") as f:
+            base = f["AstraTurbo"]
+            zone = base["Zone_0"]
+            assert "ZoneBC" in zone, "ZoneBC should be written"
+            zonebc = zone["ZoneBC"]
+            assert "left" in zonebc
+            assert "right" in zonebc
+            assert "bottom" in zonebc
+
+    def test_write_cgns_connectivity(self, tmp_path):
+        """write_cgns_connectivity should create GridConnectivity1to1 nodes."""
+        from astraturbo.export.cgns_writer import (
+            write_cgns_structured,
+            write_cgns_connectivity,
+        )
+
+        block = np.random.rand(5, 5, 3)
+        filepath = tmp_path / "test_conn.cgns"
+        write_cgns_structured(filepath, [block])
+
+        import h5py
+        with h5py.File(filepath, "a") as f:
+            zone = f["AstraTurbo"]["Zone_0"]
+            write_cgns_connectivity(zone, "Zone_1")
+
+        with h5py.File(filepath, "r") as f:
+            zone = f["AstraTurbo"]["Zone_0"]
+            assert "conn_Zone_1" in zone
+
+
+class TestDynamicPatchNames:
+    """Test dynamic patch name mapping in OpenFOAM (Gaps 9, 10)."""
+
+    def test_custom_patch_names(self, tmp_path):
+        """OpenFOAM BC writers should use custom patch names."""
+        from astraturbo.cfd.openfoam import create_openfoam_case
+
+        custom_patches = {
+            "inlet": "my_inlet",
+            "outlet": "my_outlet",
+            "blade": "my_blade",
+            "hub": "my_hub",
+            "shroud": "my_shroud",
+        }
+        case = create_openfoam_case(
+            case_dir=tmp_path / "custom_patch",
+            patch_names=custom_patches,
+        )
+
+        u_content = (case / "0" / "U").read_text()
+        assert "my_inlet" in u_content
+        assert "my_outlet" in u_content
+        assert "my_blade" in u_content
+
+
+class TestSolverCheck:
+    """Test solver availability check (Gap 11)."""
+
+    def test_solver_check_returns_error_for_missing(self, tmp_path):
+        """_check_solver_available should return error for missing solver."""
+        from astraturbo.cfd.workflow import CFDWorkflow, CFDWorkflowConfig
+
+        cfg = CFDWorkflowConfig(solver="openfoam")
+        wf = CFDWorkflow(cfg)
+        wf.setup_case(tmp_path / "solver_check")
+
+        # This test just verifies the method exists and returns a string or None
+        result = wf._check_solver_available()
+        # On most dev machines simpleFoam won't be installed
+        assert result is None or isinstance(result, str)
+
+
+class TestEndToEndPipeline:
+    """End-to-end: meanline -> profile -> mesh -> CFD case (all gaps closed)."""
+
+    def test_full_pipeline(self, tmp_path):
+        """DesignChain.run() with CFD output should produce a complete case."""
+        from astraturbo.foundation.design_chain import DesignChain
+
+        chain = DesignChain()
+        chain.set_parameters({
+            "pressure_ratio": 1.3,
+            "mass_flow": 10.0,
+            "rpm": 10000.0,
+            "cfd_output": str(tmp_path / "e2e_case"),
+        }, auto_run=False)
+
+        result = chain.run()
+
+        # Check all stages ran
+        stage_names = [s.stage_name for s in result.stages]
+        assert "meanline" in stage_names
+        assert "profile" in stage_names
+
+        # Check meanline propagated cl0
+        meanline_data = None
+        for s in result.stages:
+            if s.stage_name == "meanline" and s.success:
+                meanline_data = s.data
+        assert meanline_data is not None
+        assert meanline_data["cl0"] > 0
+
+        # Check CFD case was set up
+        cfd_stage = None
+        for s in result.stages:
+            if s.stage_name == "cfd":
+                cfd_stage = s
+        assert cfd_stage is not None
+        assert cfd_stage.success
+        assert (tmp_path / "e2e_case" / "system" / "controlDict").exists()

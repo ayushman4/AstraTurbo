@@ -7,6 +7,7 @@ and lofting.
 
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 import numpy as np
@@ -144,10 +145,67 @@ class BladeRow(Node):
         # Loft surface through 3D profiles (needs at least 2 distinct profiles)
         try:
             self._blade_surface = loft_blade_surface(self._profiles_3d)
-        except Exception:
-            # Surface lofting can fail if profiles are too similar;
-            # store None but keep the 3D profiles for other uses
+        except Exception as e:
+            # Surface lofting can fail if profiles are too similar
+            logging.getLogger(__name__).warning(
+                "Blade surface lofting failed: %s. Keeping 3D profiles for other uses.", e
+            )
             self._blade_surface = None
+
+        # Validate blade surface if lofting succeeded
+        if self._blade_surface is not None:
+            self._validate_blade_surface()
+
+    def _validate_blade_surface(self) -> None:
+        """Validate blade surface for self-intersection and minimum thickness."""
+        logger = logging.getLogger(__name__)
+
+        if self._profiles_3d is None:
+            return
+
+        min_thickness_mm = 0.3  # Minimum acceptable thickness in mm
+
+        for idx, profile in enumerate(self._profiles_3d):
+            if profile.shape[1] < 2:
+                continue
+
+            n_pts = len(profile)
+            if n_pts < 4:
+                continue
+
+            # Check minimum thickness: measure distance between points at
+            # equivalent stations on upper and lower surfaces
+            mid = n_pts // 2
+            # Upper surface: first half, lower surface: second half
+            for i in range(min(mid, n_pts - mid)):
+                if i < mid and (mid + i) < n_pts:
+                    dist = np.linalg.norm(profile[i] - profile[-(i + 1)])
+                    if dist < min_thickness_mm * 1e-3 and dist > 1e-12:
+                        logger.warning(
+                            "Span station %d: thickness %.4f mm at point %d "
+                            "is below minimum %.1f mm",
+                            idx, dist * 1e3, i, min_thickness_mm,
+                        )
+                        break
+
+            # Check normals consistency for self-intersection detection
+            if profile.shape[1] >= 2:
+                edges = np.diff(profile[:, :2], axis=0)
+                normals = np.column_stack([-edges[:, 1], edges[:, 0]])
+                norms = np.linalg.norm(normals, axis=1, keepdims=True)
+                norms = np.where(norms < 1e-15, 1.0, norms)
+                normals = normals / norms
+
+                # Check for sign flips in normal direction (indicates self-intersection)
+                if len(normals) > 2:
+                    dots = np.sum(normals[:-1] * normals[1:], axis=1)
+                    sign_flips = np.sum(dots < -0.5)
+                    if sign_flips > 2:  # Allow a couple at LE/TE
+                        logger.warning(
+                            "Span station %d: detected %d normal direction reversals, "
+                            "possible self-intersection.",
+                            idx, sign_flips,
+                        )
 
     @property
     def blade_surface(self):

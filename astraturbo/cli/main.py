@@ -78,6 +78,16 @@ def main():
     mesh_parser.add_argument("--n-outlet", type=int, default=15, help="Outlet cells")
     mesh_parser.add_argument("--n-passage", type=int, default=20, help="Passage pitchwise cells")
     mesh_parser.add_argument(
+        "--3d", dest="three_d", action="store_true",
+        help="Generate 3D mesh by stacking at multiple span stations",
+    )
+    mesh_parser.add_argument("--n-span", type=int, default=3,
+                             help="Number of span stations for 3D mesh (default: 3)")
+    mesh_parser.add_argument("--span", type=float, default=0.05,
+                             help="Total span height (m) for 3D mesh (default: 0.05)")
+    mesh_parser.add_argument("--with-bcs", action="store_true",
+                             help="Write CGNS boundary conditions (inlet/outlet/blade/periodic)")
+    mesh_parser.add_argument(
         "--format", choices=["cgns", "openfoam", "vtk"], default="cgns",
         help="Output format (default: cgns)",
     )
@@ -99,6 +109,9 @@ def main():
     cfd_parser.add_argument("--omega", type=float, default=0.0, help="Angular velocity (rad/s)")
     cfd_parser.add_argument("--mesh", default=None, help="Path to mesh file (CGNS, .msh, etc.)")
     cfd_parser.add_argument("--nprocs", type=int, default=1, help="Number of parallel processes")
+    cfd_parser.add_argument("--compressible", action="store_true", help="Use compressible solver (rhoSimpleFoam)")
+    cfd_parser.add_argument("--total-pressure", type=float, default=101325.0, help="Inlet total pressure (Pa)")
+    cfd_parser.add_argument("--total-temperature", type=float, default=288.15, help="Inlet total temperature (K)")
     cfd_parser.add_argument("-o", "--output", default="cfd_case", help="Output case directory")
 
     # --- meanline ---
@@ -111,6 +124,8 @@ def main():
     ml_parser.add_argument("--n-stages", type=int, default=None, help="Number of stages (auto if omitted)")
     ml_parser.add_argument("--reaction", type=float, default=0.5, help="Degree of reaction (default: 0.5)")
     ml_parser.add_argument("--eta", type=float, default=0.90, help="Polytropic efficiency (default: 0.90)")
+    ml_parser.add_argument("--radial-stations", type=int, default=3,
+                           help="Number of radial stations for blade angles (default: 3 = hub/mid/tip)")
 
     # --- fea ---
     fea_parser = subparsers.add_parser("fea", help="Set up FEA structural analysis")
@@ -382,7 +397,10 @@ def _cmd_profile(args):
 
 def _cmd_mesh(args):
     """Generate a mesh from a profile CSV."""
-    from astraturbo.mesh.multiblock import generate_blade_passage_mesh
+    from astraturbo.mesh.multiblock import (
+        generate_blade_passage_mesh,
+        generate_blade_passage_mesh_3d,
+    )
 
     # Load profile
     prof_path = Path(args.profile)
@@ -397,25 +415,60 @@ def _cmd_mesh(args):
 
     print(f"Profile loaded: {len(profile)} points from {args.profile}")
 
-    # Generate mesh
-    mesh = generate_blade_passage_mesh(
-        profile=profile,
-        pitch=args.pitch,
-        n_blade=args.n_blade,
-        n_ogrid=args.n_ogrid,
-        n_inlet=args.n_inlet,
-        n_outlet=args.n_outlet,
-        n_passage=args.n_passage,
-    )
+    # Generate mesh (2D or 3D)
+    if args.three_d:
+        # Create slightly scaled profiles at each span station
+        span_positions = np.linspace(0, args.span, args.n_span).tolist()
+        profiles = []
+        for i, z in enumerate(span_positions):
+            # Slight thickness variation along span (thinner at tip)
+            scale = 1.0 - 0.15 * (z / args.span) if args.span > 0 else 1.0
+            p = profile.copy()
+            p[:, 1] *= scale
+            profiles.append(p)
 
-    print(f"Mesh generated: {mesh.n_blocks} blocks, {mesh.total_cells} cells")
+        mesh = generate_blade_passage_mesh_3d(
+            profiles=profiles,
+            span_positions=span_positions,
+            pitch=args.pitch,
+            n_blade=args.n_blade,
+            n_ogrid=args.n_ogrid,
+            n_inlet=args.n_inlet,
+            n_outlet=args.n_outlet,
+            n_passage=args.n_passage,
+        )
+        print(f"3D mesh generated: {mesh.n_blocks} blocks, {args.n_span} span stations")
+    else:
+        mesh = generate_blade_passage_mesh(
+            profile=profile,
+            pitch=args.pitch,
+            n_blade=args.n_blade,
+            n_ogrid=args.n_ogrid,
+            n_inlet=args.n_inlet,
+            n_outlet=args.n_outlet,
+            n_passage=args.n_passage,
+        )
+        print(f"Mesh generated: {mesh.n_blocks} blocks, {mesh.total_cells} cells")
+
+    # Build patches dict for CGNS BC export
+    cgns_patches = None
+    if args.with_bcs and args.format == "cgns":
+        cgns_patches = {}
+        for block in mesh.blocks:
+            if block.patches:
+                cgns_patches[block.name] = block.patches
+        if cgns_patches:
+            print(f"CGNS boundary conditions: {sum(len(v) for v in cgns_patches.values())} BCs across {len(cgns_patches)} blocks")
 
     # Export
     output = Path(args.output)
     if args.format == "cgns":
         if not output.suffix:
             output = output.with_suffix(".cgns")
-        mesh.export_cgns(output)
+        from astraturbo.export.cgns_writer import write_cgns_structured
+        block_arrays = [b.points for b in mesh.blocks]
+        block_names = [b.name for b in mesh.blocks]
+        write_cgns_structured(output, block_arrays, block_names, patches=cgns_patches)
     elif args.format == "openfoam":
         mesh.export_openfoam(output)
     elif args.format == "vtk":
@@ -557,6 +610,9 @@ def _cmd_cfd(args):
         is_rotating=args.rotating,
         omega=args.omega,
         n_procs=args.nprocs,
+        compressible=args.compressible,
+        total_pressure=args.total_pressure,
+        total_temperature=args.total_temperature,
     )
 
     wf = CFDWorkflow(cfg)
@@ -566,7 +622,12 @@ def _cmd_cfd(args):
 
     print(f"{args.solver.upper()} case created: {case}")
     print(f"  Solver:      {args.solver}")
-    print(f"  Velocity:    {args.velocity} m/s")
+    if args.compressible:
+        print(f"  Mode:        compressible (rhoSimpleFoam)")
+        print(f"  Total P:     {args.total_pressure} Pa")
+        print(f"  Total T:     {args.total_temperature} K")
+    else:
+        print(f"  Velocity:    {args.velocity} m/s")
     print(f"  Turbulence:  {args.turbulence}")
     if args.rotating:
         print(f"  Rotating:    omega = {args.omega} rad/s")
@@ -591,6 +652,8 @@ def _cmd_cfd(args):
 def _cmd_meanline(args):
     """Run meanline compressor design."""
     from astraturbo.design import meanline_compressor, meanline_to_blade_parameters
+    from astraturbo.design.meanline import blade_angle_to_cl0
+    import math
 
     result = meanline_compressor(
         overall_pressure_ratio=args.pr,
@@ -601,6 +664,7 @@ def _cmd_meanline(args):
         n_stages=args.n_stages,
         eta_poly=args.eta,
         reaction=args.reaction,
+        radial_stations=args.radial_stations,
     )
 
     print(result.summary())
@@ -618,6 +682,28 @@ def _cmd_meanline(args):
               f"solidity={p['stator_solidity']:.2f}")
         print(f"    De Haller: {p['de_haller']:.3f}  "
               f"{'OK' if p['de_haller'] > 0.72 else 'WARNING: below 0.72'}")
+
+    # Show auto-computed cl0 from blade angles
+    print()
+    print("Auto-computed parameters (for profile generation):")
+    for i, (stage, bp) in enumerate(zip(result.stages, params)):
+        cl0 = blade_angle_to_cl0(
+            stage.rotor_inlet_beta, stage.rotor_outlet_beta, bp["rotor_solidity"]
+        )
+        print(f"  Stage {stage.stage_number}: cl0 = {cl0:.4f}")
+
+    # Show radial blade angle distribution
+    print()
+    print("Radial blade angle distribution (free vortex):")
+    for stage in result.stages:
+        print(f"  Stage {stage.stage_number}:")
+        print(f"    {'Radius (m)':>12s}  {'beta_in (deg)':>14s}  {'beta_out (deg)':>15s}  "
+              f"{'alpha_in (deg)':>15s}  {'alpha_out (deg)':>16s}")
+        for a in stage.radial_blade_angles:
+            print(f"    {a['r']:12.4f}  {math.degrees(a['beta_in']):14.2f}  "
+                  f"{math.degrees(a['beta_out']):15.2f}  "
+                  f"{math.degrees(a['alpha_in']):15.2f}  "
+                  f"{math.degrees(a['alpha_out']):16.2f}")
 
 
 def _cmd_fea(args):
