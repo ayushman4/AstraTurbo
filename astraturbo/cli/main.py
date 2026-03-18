@@ -132,6 +132,8 @@ def main():
                            help="Generate full compressor map and print speed line table")
     ml_parser.add_argument("--rpm-fractions", type=str, default="0.5,0.6,0.7,0.8,0.9,0.95,1.0,1.05",
                            help="Comma-separated RPM fractions for map (default: 0.5,0.6,...,1.05)")
+    ml_parser.add_argument("--report", type=str, default=None,
+                           help="Generate HTML design report to this file")
 
     # --- blade ---
     bl_parser = subparsers.add_parser("blade", help="Build 3D blade from hub-to-tip profiles")
@@ -158,6 +160,18 @@ def main():
     pipe_parser.add_argument("--cl0", type=float, default=None, help="Override CL0 (auto from meanline if omitted)")
     pipe_parser.add_argument("--cfd-output", default=None, help="CFD case output directory")
     pipe_parser.add_argument("--compressible", action="store_true", help="Use compressible CFD")
+
+    # --- centrifugal ---
+    cent_parser = subparsers.add_parser("centrifugal", help="Centrifugal compressor meanline design")
+    cent_parser.add_argument("--pr", type=float, required=True, help="Pressure ratio")
+    cent_parser.add_argument("--mass-flow", type=float, required=True, help="Mass flow (kg/s)")
+    cent_parser.add_argument("--rpm", type=float, required=True, help="RPM")
+    cent_parser.add_argument("--r1-hub", type=float, default=0.02, help="Impeller inlet hub radius (m)")
+    cent_parser.add_argument("--r1-tip", type=float, default=0.05, help="Impeller inlet tip radius (m)")
+    cent_parser.add_argument("--r2", type=float, default=None, help="Impeller exit radius (m, auto if omitted)")
+    cent_parser.add_argument("--backsweep", type=float, default=-30.0, help="Backsweep angle (deg, default -30)")
+    cent_parser.add_argument("--n-blades", type=int, default=17, help="Number of impeller blades")
+    cent_parser.add_argument("--report", type=str, default=None, help="Generate HTML report to this file")
 
     # --- fea ---
     fea_parser = subparsers.add_parser("fea", help="Set up FEA structural analysis")
@@ -339,6 +353,8 @@ def main():
         _cmd_blade(args)
     elif args.command == "pipeline":
         _cmd_pipeline(args)
+    elif args.command == "centrifugal":
+        _cmd_centrifugal(args)
 
 
 # ────────────────────────────────────────────────────────────────
@@ -776,6 +792,65 @@ def _cmd_meanline(args):
                 if design_pr > 1.0:
                     sm = (surge_pr - design_pr) / design_pr
                     print(f"\nSurge margin at design speed: {sm:.4f} ({sm*100:.1f}%)")
+
+    # Report generation
+    report_path = getattr(args, 'report', None)
+    if report_path:
+        from astraturbo.reports import generate_report, ReportConfig
+        cfg = ReportConfig(
+            title=f"Axial Compressor Design — PR {args.pr}",
+            output_path=report_path,
+        )
+        # Collect what we have
+        od_result = None
+        cmap_result = None
+        if getattr(args, 'off_design', False):
+            # Re-run to capture result (already printed above)
+            from astraturbo.design.off_design import off_design_compressor as _od
+            od_result = _od(result, mass_flow=args.mass_flow, rpm=args.rpm)
+        if getattr(args, 'map', False):
+            from astraturbo.design.compressor_map import generate_compressor_map as _gm
+            rpm_fracs = [float(x) for x in args.rpm_fractions.split(",")]
+            cmap_result = _gm(result, rpm_fractions=rpm_fracs)
+        path = generate_report(
+            config=cfg,
+            meanline_result=result,
+            off_design_result=od_result,
+            compressor_map=cmap_result,
+            blade_params=params,
+        )
+        print(f"\nReport generated: {path}")
+
+
+def _cmd_centrifugal(args):
+    """Design a centrifugal compressor."""
+    from astraturbo.design.centrifugal import centrifugal_compressor
+
+    kwargs = {
+        "pressure_ratio": args.pr,
+        "mass_flow": args.mass_flow,
+        "rpm": args.rpm,
+        "r1_hub": args.r1_hub,
+        "r1_tip": args.r1_tip,
+        "beta2_blade_deg": args.backsweep,
+        "n_blades": args.n_blades,
+    }
+    if args.r2 is not None:
+        kwargs["r2"] = args.r2
+
+    result = centrifugal_compressor(**kwargs)
+    print(result.summary())
+
+    # Report
+    report_path = getattr(args, 'report', None)
+    if report_path:
+        from astraturbo.reports import generate_report, ReportConfig
+        cfg = ReportConfig(
+            title=f"Centrifugal Compressor — PR {args.pr}",
+            output_path=report_path,
+        )
+        generate_report(config=cfg, centrifugal_result=result)
+        print(f"\nReport generated: {report_path}")
 
 
 def _cmd_blade(args):

@@ -42,7 +42,7 @@ python -m astraturbo --version
 # astraturbo 0.1.0
 
 python -m pytest tests/ -q
-# 416+ passed
+# 435+ passed
 ```
 
 ---
@@ -201,6 +201,24 @@ python -m astraturbo yplus --velocity 100 --chord 0.1
 python -m astraturbo yplus --velocity 100 --chord 0.1 --cell-height 0.00001
 ```
 
+### Centrifugal compressor design
+
+```bash
+# eVTOL / drone / turbocharger centrifugal compressor
+python -m astraturbo centrifugal --pr 3.0 --mass-flow 1.0 --rpm 60000
+
+# With HTML report
+python -m astraturbo centrifugal --pr 2.5 --mass-flow 0.5 --rpm 120000 --report report.html
+```
+
+### Design reports
+
+```bash
+# Generate HTML report from axial compressor design
+python -m astraturbo meanline --pr 2.1 --mass-flow 20 --rpm 17189 \
+  --r-hub 0.178 --r-tip 0.252 --map --report design_report.html
+```
+
 ### 3D blade building
 
 ```bash
@@ -336,6 +354,27 @@ cmap = generate_compressor_map(design, rpm_fractions=[0.7, 0.85, 1.0, 1.05])
 print(cmap.summary())
 # Speed lines with mass flow, PR, efficiency, stall/choke flags
 # Surge line connecting stall points across speed lines
+```
+
+### Centrifugal compressor design
+
+```python
+from astraturbo.design import centrifugal_compressor
+
+# Design a drone/eVTOL centrifugal compressor
+result = centrifugal_compressor(
+    pressure_ratio=3.0, mass_flow=0.5, rpm=80000,
+    r1_tip=0.03, beta2_blade_deg=-30, n_blades=17,
+)
+print(result.summary())
+# PR, efficiency, power, tip speed, impeller + diffuser geometry
+
+# Generate an HTML report
+from astraturbo.reports import generate_report, ReportConfig
+generate_report(
+    config=ReportConfig(title="Drone Compressor", output_path="report.html"),
+    centrifugal_result=result,
+)
 ```
 
 ### Generate a profile
@@ -507,11 +546,11 @@ print(response2)
 assistant.reset()
 ```
 
-Claude calls 19 AstraTurbo tools directly —
-meanline design, off-design analysis, compressor maps, profile generation,
-3D blade building, mesh generation and export, CFD setup, solver execution,
-FEA setup, y+ calculator, full design pipeline, design database,
-file inspection, material database, format listing.
+Claude calls 21 AstraTurbo tools directly —
+meanline design (axial + centrifugal), off-design analysis, compressor maps,
+profile generation, 3D blade building, mesh generation and export, CFD setup,
+solver execution, FEA setup, y+ calculator, full design pipeline, design
+database, HTML report generation, file inspection, material database.
 
 Setup:
 ```bash
@@ -525,8 +564,8 @@ export ANTHROPIC_API_KEY=sk-ant-api03-...
 
 ```
 astraturbo/
-├── ai/              Claude-powered AI assistant (19 tools, NL interface)
-├── design/          Velocity triangles, meanline analysis, off-design, compressor maps
+├── ai/              Claude-powered AI assistant (21 tools, NL interface)
+├── design/          Velocity triangles, meanline (axial + centrifugal), off-design, compressor maps
 ├── foundation/      Property system, signals, undo/redo, serialization
 ├── baseclass/       ATObject, Node tree, Drawable mixin
 ├── camberline/      8 camber line types
@@ -559,6 +598,7 @@ astraturbo/
 ├── optimization/    pymoo-based multi-objective + multi-fidelity optimization
 ├── solver/          Throughflow (S2m) solver with loss models
 ├── database/        SQLite design database (save/search/compare/export)
+├── reports/         HTML design report generator
 ├── hpc/             HPC backends: Local, SLURM, PBS, AWS Batch + auto-provisioner
 ├── gui/             PySide6 GUI with 3D viewer + AI chat panel
 └── cli/             25+ commands (profile, mesh, blade, pipeline, meanline, cfd, fea, hpc, ...)
@@ -731,7 +771,7 @@ All cross-platform (Windows, Linux, macOS).
 ```bash
 pip install -e ".[dev]"
 pytest tests/ -v
-# 416+ tests pass (unit, integration, validation, GUI, CLI)
+# 435+ tests pass (unit, integration, validation, GUI, CLI)
 ```
 
 ### Test coverage

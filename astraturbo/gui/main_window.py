@@ -140,6 +140,7 @@ class MainWindow(QMainWindow):
         # --- Compute menu ---
         compute_menu = menubar.addMenu("&Compute")
         self._add_action(compute_menu, "&Meanline Design...", self._run_meanline)
+        self._add_action(compute_menu, "&Centrifugal Compressor...", self._run_centrifugal)
         compute_menu.addSeparator()
         self._add_action(compute_menu, "Compute &Blade Geometry", self._compute_blade)
         self._add_action(compute_menu, "Generate Blade &Array (Full Annulus)", self._generate_blade_array)
@@ -977,6 +978,51 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             QMessageBox.warning(self, "Meanline Error", f"{e}\n\n{traceback.format_exc()}")
+
+    # ----------------------------------------------------------------
+    # Centrifugal compressor
+    # ----------------------------------------------------------------
+
+    def _run_centrifugal(self) -> None:
+        """Run centrifugal compressor design from a dialog."""
+        from PySide6.QtWidgets import QInputDialog, QFileDialog
+
+        pr, ok = QInputDialog.getDouble(self, "Centrifugal", "Pressure Ratio:", 3.0, 1.1, 15.0, 2)
+        if not ok:
+            return
+        mf, ok = QInputDialog.getDouble(self, "Centrifugal", "Mass Flow (kg/s):", 1.0, 0.01, 100.0, 2)
+        if not ok:
+            return
+        rpm, ok = QInputDialog.getDouble(self, "Centrifugal", "RPM:", 60000, 1000, 500000, 0)
+        if not ok:
+            return
+
+        try:
+            from ..design.centrifugal import centrifugal_compressor
+            result = centrifugal_compressor(pressure_ratio=pr, mass_flow=mf, rpm=rpm)
+
+            summary = result.summary()
+            QMessageBox.information(self, "Centrifugal Design", summary)
+            self.statusBar().showMessage(
+                f"Centrifugal: PR={result.pressure_ratio:.3f}, eta={result.isentropic_efficiency:.4f}"
+            )
+
+            # Offer report
+            save_report = QMessageBox.question(
+                self, "Save Report?", "Generate HTML report?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if save_report == QMessageBox.Yes:
+                path, _ = QFileDialog.getSaveFileName(
+                    self, "Save Report", "centrifugal_report.html", "HTML (*.html)"
+                )
+                if path:
+                    from ..reports import generate_report, ReportConfig
+                    cfg = ReportConfig(title=f"Centrifugal Compressor — PR {pr}", output_path=path)
+                    generate_report(config=cfg, centrifugal_result=result)
+                    self.statusBar().showMessage(f"Report saved: {path}")
+        except Exception as e:
+            QMessageBox.warning(self, "Centrifugal Error", f"{e}\n\n{traceback.format_exc()}")
 
     # ----------------------------------------------------------------
     # Undo / Redo

@@ -844,6 +844,107 @@ _register(
 
 
 # ──────────────────────────────────────────────────────
+# 20. Centrifugal compressor design
+# ──────────────────────────────────────────────────────
+
+_register(
+    "centrifugal_compressor",
+    "Design a centrifugal (radial) compressor — impeller + diffuser. "
+    "Used for eVTOL, drones, turbochargers, small turboshafts. "
+    "Returns pressure ratio, efficiency, power, tip speed, slip factor, "
+    "impeller and diffuser geometry.",
+    {
+        "type": "object",
+        "properties": {
+            "pressure_ratio": {
+                "type": "number",
+                "description": "Target total-to-total pressure ratio (e.g. 3.0)",
+            },
+            "mass_flow": {
+                "type": "number",
+                "description": "Mass flow rate (kg/s)",
+            },
+            "rpm": {
+                "type": "number",
+                "description": "Rotational speed (RPM)",
+            },
+            "r1_tip": {
+                "type": "number",
+                "description": "Impeller inlet tip radius (m, default 0.05)",
+            },
+            "backsweep_deg": {
+                "type": "number",
+                "description": "Backsweep angle (degrees, negative = backsweep, default -30)",
+            },
+            "n_blades": {
+                "type": "integer",
+                "description": "Number of impeller blades (default 17)",
+            },
+        },
+        "required": ["pressure_ratio", "mass_flow", "rpm"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
+# 21. Report generation
+# ──────────────────────────────────────────────────────
+
+_register(
+    "generate_report",
+    "Generate an HTML design report from analysis results. The report includes "
+    "design summary, velocity triangles, compressor map, material properties, "
+    "and blade parameters. Returns the path to the generated file.",
+    {
+        "type": "object",
+        "properties": {
+            "title": {
+                "type": "string",
+                "description": "Report title (default: 'AstraTurbo Design Report')",
+            },
+            "output_path": {
+                "type": "string",
+                "description": "Output HTML file path (default: report.html)",
+            },
+            "overall_pressure_ratio": {
+                "type": "number",
+                "description": "Design PR for axial compressor (generates meanline section)",
+            },
+            "mass_flow": {
+                "type": "number",
+                "description": "Mass flow (kg/s)",
+            },
+            "rpm": {
+                "type": "number",
+                "description": "RPM",
+            },
+            "r_hub": {
+                "type": "number",
+                "description": "Hub radius (m) for axial compressor",
+            },
+            "r_tip": {
+                "type": "number",
+                "description": "Tip radius (m) for axial compressor",
+            },
+            "include_map": {
+                "type": "boolean",
+                "description": "Include compressor map in report (default true)",
+            },
+            "material": {
+                "type": "string",
+                "description": "Material name for properties section",
+            },
+            "material_temperature": {
+                "type": "number",
+                "description": "Operating temperature (K) for material section",
+            },
+        },
+        "required": ["output_path"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
 # Tool execution dispatcher
 # ──────────────────────────────────────────────────────
 
@@ -888,6 +989,10 @@ def execute_tool(name: str, inputs: dict) -> str:
             return _exec_database_save(inputs)
         elif name == "database_query":
             return _exec_database_query(inputs)
+        elif name == "centrifugal_compressor":
+            return _exec_centrifugal(inputs)
+        elif name == "generate_report":
+            return _exec_generate_report(inputs)
         else:
             return f"Unknown tool: {name}"
     except Exception as e:
@@ -1635,3 +1740,76 @@ def _exec_database_query(inputs: dict) -> str:
 
         else:
             return f"Error: unknown action '{action}'"
+
+
+def _exec_centrifugal(inputs: dict) -> str:
+    from astraturbo.design.centrifugal import centrifugal_compressor
+
+    pr = float(inputs["pressure_ratio"])
+    if not (1.01 <= pr <= 15.0):
+        return f"Error: pressure ratio {pr} out of range [1.01, 15.0]"
+
+    kwargs = {
+        "pressure_ratio": pr,
+        "mass_flow": float(inputs["mass_flow"]),
+        "rpm": float(inputs["rpm"]),
+    }
+    if "r1_tip" in inputs:
+        kwargs["r1_tip"] = float(inputs["r1_tip"])
+    if "backsweep_deg" in inputs:
+        kwargs["beta2_blade_deg"] = float(inputs["backsweep_deg"])
+    if "n_blades" in inputs:
+        kwargs["n_blades"] = int(inputs["n_blades"])
+
+    result = centrifugal_compressor(**kwargs)
+    return result.summary()
+
+
+def _exec_generate_report(inputs: dict) -> str:
+    from astraturbo.reports import generate_report, ReportConfig
+
+    output_path = inputs["output_path"]
+    _validate_path(output_path)
+
+    cfg = ReportConfig(
+        title=inputs.get("title", "AstraTurbo Design Report"),
+        output_path=output_path,
+        include_map=inputs.get("include_map", True),
+    )
+
+    meanline_result = None
+    blade_params = None
+    compressor_map = None
+    material = None
+    mat_temp = inputs.get("material_temperature", None)
+
+    # Run meanline if parameters provided
+    if "overall_pressure_ratio" in inputs and "r_hub" in inputs:
+        from astraturbo.design import meanline_compressor, meanline_to_blade_parameters
+        from astraturbo.design import generate_compressor_map
+        meanline_result = meanline_compressor(
+            overall_pressure_ratio=float(inputs["overall_pressure_ratio"]),
+            mass_flow=float(inputs.get("mass_flow", 20.0)),
+            rpm=float(inputs.get("rpm", 15000)),
+            r_hub=float(inputs["r_hub"]),
+            r_tip=float(inputs["r_tip"]),
+        )
+        blade_params = meanline_to_blade_parameters(meanline_result)
+        if cfg.include_map:
+            compressor_map = generate_compressor_map(
+                meanline_result, rpm_fractions=[0.7, 0.85, 1.0, 1.05], n_points=10,
+            )
+
+    if "material" in inputs:
+        from astraturbo.fea import get_material
+        material = get_material(inputs["material"])
+
+    path = generate_report(
+        config=cfg,
+        meanline_result=meanline_result,
+        compressor_map=compressor_map,
+        material=material,
+        material_temperature=float(mat_temp) if mat_temp else None,
+        blade_params=blade_params,
+    )
+    return f"Report generated: {path}"

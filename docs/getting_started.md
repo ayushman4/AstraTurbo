@@ -30,7 +30,7 @@ python -m astraturbo --version
 # astraturbo 0.1.0
 
 python -m pytest tests/ -q
-# 416+ passed
+# 435+ passed
 ```
 
 ---
@@ -600,6 +600,8 @@ python -m astraturbo meanline --pr 2.1 --mass-flow 20 --rpm 17189 \
 | `astraturbo.design.meanline` | `from astraturbo.design.meanline import blade_angle_to_cl0` | Lieblein cl0 correlation |
 | `astraturbo.design.off_design` | `from astraturbo.design import off_design_compressor` | Off-design meanline analysis |
 | `astraturbo.design.compressor_map` | `from astraturbo.design import generate_compressor_map` | Compressor map generation |
+| `astraturbo.design.centrifugal` | `from astraturbo.design import centrifugal_compressor` | Centrifugal compressor design |
+| `astraturbo.reports` | `from astraturbo.reports import generate_report` | HTML report generation |
 | `astraturbo.nurbs` | `from astraturbo.nurbs import interpolate_3d` | NURBS utilities |
 | `astraturbo.machine` | `from astraturbo.machine import TurboMachine` | Machine container |
 | `astraturbo.mesh` | `from astraturbo.mesh import SCMMesher, OGridGenerator` | Mesh generation |
@@ -636,6 +638,7 @@ python -m astraturbo meanline --pr 2.1 --mass-flow 20 --rpm 17189 \
 | `astraturbo meanline [options]` | Meanline design (`--off-design`, `--map`, `--radial-stations N`) |
 | `astraturbo blade [options]` | Build 3D blade from hub-to-tip profiles (`-o mesh.cgns`) |
 | `astraturbo pipeline [options]` | Full design pipeline (`--compressible`, `--cfd-output`) |
+| `astraturbo centrifugal [options]` | Centrifugal compressor design (`--report report.html`) |
 | `astraturbo cfd [options]` | CFD case setup (`--compressible` for rhoSimpleFoam) |
 | `astraturbo fea [options]` | FEA structural analysis |
 | `astraturbo yplus [options]` | y+ / cell height calculator |

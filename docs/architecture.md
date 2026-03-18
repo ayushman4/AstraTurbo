@@ -54,10 +54,11 @@ materials, formats, file inspect). Requires `ANTHROPIC_API_KEY`.
 Accessible via: GUI (AI Assistant tab), CLI (`astraturbo ai`), Python (`create_assistant()`).
 
 ### design/
-Velocity triangle calculations, meanline stage-by-stage analysis, off-design solver,
-and compressor map generation.
+Velocity triangle calculations, meanline stage-by-stage analysis (axial and centrifugal),
+off-design solver, and compressor map generation.
 Input: pressure ratio, mass flow, RPM, radii.
-Output: blade angles, loading coefficients, De Haller ratios, speed lines, surge margin.
+Output: blade angles, loading coefficients, De Haller ratios, speed lines, surge margin,
+impeller/diffuser geometry (centrifugal).
 Connects to blade/ by auto-generating stagger, camber, and solidity parameters.
 
 ### cfd/

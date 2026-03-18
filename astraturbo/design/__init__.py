@@ -39,6 +39,11 @@ from .compressor_map import (
     CompressorMap,
     generate_compressor_map,
 )
+from .centrifugal import (
+    CentrifugalResult,
+    centrifugal_compressor,
+    wiesner_slip_factor,
+)
 
 __all__ = [
     "VelocityTriangle",
@@ -57,4 +62,7 @@ __all__ = [
     "SpeedLine",
     "CompressorMap",
     "generate_compressor_map",
+    "CentrifugalResult",
+    "centrifugal_compressor",
+    "wiesner_slip_factor",
 ]
