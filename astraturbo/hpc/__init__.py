@@ -1,8 +1,8 @@
 """HPC / Cloud integration module for AstraTurbo.
 
-Provides job submission and management for remote HPC clusters
-and local execution:
-  - job_manager: HPCJobManager with SLURM, PBS, and Local backends
+Provides job submission and management for remote HPC clusters,
+local execution, and AWS Batch:
+  - job_manager: HPCJobManager with SLURM, PBS, Local, and AWS Batch backends
 """
 
 from .job_manager import (
@@ -11,6 +11,7 @@ from .job_manager import (
     SLURMBackend,
     PBSBackend,
     LocalBackend,
+    AWSBatchBackend,
     JobStatus,
 )
 
@@ -20,5 +21,6 @@ __all__ = [
     "SLURMBackend",
     "PBSBackend",
     "LocalBackend",
+    "AWSBatchBackend",
     "JobStatus",
 ]

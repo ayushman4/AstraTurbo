@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QTabWidget,
+    QWidget,
 )
 
 from ..machine import TurboMachine, save_project, load_project
@@ -137,6 +138,7 @@ class MainWindow(QMainWindow):
         self._add_action(compute_menu, "Generate S&1 Mesh (Blade-to-Blade)", self._compute_s1_mesh)
         self._add_action(compute_menu, "Generate &O-Grid Mesh", self._compute_ogrid_mesh)
         self._add_action(compute_menu, "Generate Multi-&Block Mesh", self._compute_multiblock_mesh)
+        self._add_action(compute_menu, "Generate &Tip Clearance Mesh...", self._generate_tip_clearance)
         compute_menu.addSeparator()
 
         cfd_menu = compute_menu.addMenu("CFD Case Setup")
@@ -149,6 +151,7 @@ class MainWindow(QMainWindow):
         self._add_action(compute_menu, "FEA &Structural Analysis...", self._setup_fea)
         compute_menu.addSeparator()
         self._add_action(compute_menu, "Run &Optimization...", self._run_optimization)
+        self._add_action(compute_menu, "Run Multi-&Fidelity Optimization...", self._run_multifidelity)
         compute_menu.addSeparator()
         self._add_action(compute_menu, "Run &Throughflow Solver...", self._run_throughflow)
         self._add_action(compute_menu, "S&mooth Mesh...", self._smooth_mesh)
@@ -221,10 +224,12 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self._profile_panel, "2D Profile")
         self._tabs.addTab(self._blade_panel, "3D Blade")
 
-        # Point cloud viewer tab
-        from .viewer.point_cloud_viewer import PointCloudViewer
-        self._point_cloud_viewer = PointCloudViewer()
-        self._tabs.addTab(self._point_cloud_viewer, "3D Viewer")
+        # 3D Viewer tab — lazy-initialized on first use to avoid
+        # VTK/OpenGL context creation at startup (faster launch,
+        # and enables headless testing without segfaults).
+        self._point_cloud_viewer = None
+        self._viewer_placeholder = QWidget()
+        self._viewer_tab_index = self._tabs.addTab(self._viewer_placeholder, "3D Viewer")
 
         # AI Chat tab
         from .panels.ai_chat import AIChatPanel
@@ -250,6 +255,19 @@ class MainWindow(QMainWindow):
 
     def _setup_statusbar(self) -> None:
         self.statusBar().showMessage("Ready")
+
+    def _ensure_point_cloud_viewer(self):
+        """Lazy-init the 3D point cloud viewer on first use.
+
+        Defers VTK/OpenGL context creation until actually needed,
+        which speeds up startup and avoids segfaults in headless tests.
+        """
+        if self._point_cloud_viewer is None:
+            from .viewer.point_cloud_viewer import PointCloudViewer
+            self._point_cloud_viewer = PointCloudViewer()
+            self._tabs.removeTab(self._viewer_tab_index)
+            self._tabs.insertTab(self._viewer_tab_index, self._point_cloud_viewer, "3D Viewer")
+        return self._point_cloud_viewer
 
     def _connect_signals(self) -> None:
         """Wire panel signals to main window actions."""
@@ -387,8 +405,9 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "OpenFOAM Points Loaded", msg)
 
                 # Display in 3D viewer and switch to that tab
-                self._point_cloud_viewer.set_points(points, stats)
-                self._tabs.setCurrentWidget(self._point_cloud_viewer)
+                viewer = self._ensure_point_cloud_viewer()
+                viewer.set_points(points, stats)
+                self._tabs.setCurrentWidget(viewer)
 
                 self.statusBar().showMessage(
                     f"Loaded {stats['n_points']:,} points from {path}"
@@ -570,8 +589,9 @@ class MainWindow(QMainWindow):
             n_points = len(all_points)
 
             # Display in 3D viewer
-            self._point_cloud_viewer.set_points(all_points)
-            self._tabs.setCurrentWidget(self._point_cloud_viewer)
+            viewer = self._ensure_point_cloud_viewer()
+            viewer.set_points(all_points)
+            self._tabs.setCurrentWidget(viewer)
 
             self.statusBar().showMessage(
                 f"Blade array: {n_blades} blades, {n_points:,} total points"
@@ -805,7 +825,7 @@ class MainWindow(QMainWindow):
             )
             wf = CFDWorkflow(cfg)
             if self._last_mesh:
-                pass  # Could set mesh path here
+                wf.mesh_path = self._last_mesh
 
             case = wf.setup_case(path)
 
@@ -954,6 +974,85 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             QMessageBox.warning(self, "Optimization Error", f"{e}\n\n{traceback.format_exc()}")
+
+    def _run_multifidelity(self) -> None:
+        """Run multi-fidelity optimization."""
+        from PySide6.QtWidgets import QInputDialog
+
+        n_levels, ok = QInputDialog.getInt(
+            self, "Multi-Fidelity", "Number of fidelity levels:", 3, 2, 5
+        )
+        if not ok:
+            return
+
+        try:
+            from ..optimization.multifidelity import MultiFidelityOptimizer
+
+            optimizer = MultiFidelityOptimizer.create_default_turbomachinery(
+                n_levels=n_levels
+            )
+
+            self.statusBar().showMessage("Running multi-fidelity optimization...")
+            result = optimizer.run()
+
+            best = result.best_design()
+            msg = (
+                f"Multi-Fidelity Optimization Complete\n\n"
+                f"Levels: {n_levels}\n"
+                f"Total evaluations: {sum(lvl.n_evaluations for lvl in result.levels)}\n"
+            )
+            if best:
+                msg += f"Best efficiency: {best.get('efficiency', 'N/A')}\n"
+
+            QMessageBox.information(self, "Multi-Fidelity Result", msg)
+            self.statusBar().showMessage("Multi-fidelity optimization complete")
+        except Exception as e:
+            QMessageBox.warning(self, "Multi-Fidelity Error", f"{e}\n\n{traceback.format_exc()}")
+
+    def _generate_tip_clearance(self) -> None:
+        """Generate a tip clearance mesh block."""
+        from PySide6.QtWidgets import QInputDialog
+
+        if self._last_mesh is None:
+            QMessageBox.warning(self, "No Mesh", "Generate a blade passage mesh first.")
+            return
+
+        clearance, ok = QInputDialog.getDouble(
+            self, "Tip Clearance", "Clearance height (mm):", 1.0, 0.01, 50.0, 3
+        )
+        if not ok:
+            return
+
+        n_layers, ok = QInputDialog.getInt(
+            self, "Tip Clearance", "Number of clearance layers:", 8, 2, 50
+        )
+        if not ok:
+            return
+
+        try:
+            from ..mesh.tip_clearance import generate_tip_clearance_mesh
+
+            # Use the tip of the blade passage mesh
+            blade_pts = self._last_mesh.blocks[0].points
+            tip_mesh, metrics = generate_tip_clearance_mesh(
+                blade_pts,
+                clearance_height=clearance / 1000.0,  # mm to m
+                n_clearance=n_layers,
+            )
+
+            msg = (
+                f"Tip Clearance Mesh Generated\n\n"
+                f"Shape: {tip_mesh.shape}\n"
+                f"Clearance: {clearance} mm\n"
+                f"Layers: {n_layers}\n"
+            )
+            if metrics:
+                msg += f"Max aspect ratio: {metrics.get('aspect_ratio_max', 'N/A'):.2f}\n"
+
+            QMessageBox.information(self, "Tip Clearance", msg)
+            self.statusBar().showMessage("Tip clearance mesh generated")
+        except Exception as e:
+            QMessageBox.warning(self, "Tip Clearance Error", f"{e}\n\n{traceback.format_exc()}")
 
     # ----------------------------------------------------------------
     # Tools
@@ -1227,7 +1326,7 @@ class MainWindow(QMainWindow):
         """Show a dialog for HPC job submission."""
         from PySide6.QtWidgets import QInputDialog
 
-        actions = ["Submit job", "Check job status", "Cancel job"]
+        actions = ["Submit job", "Check job status", "Cancel job", "Download results"]
         action, ok = QInputDialog.getItem(
             self, "HPC Job Manager", "Select action:", actions, 0, False
         )
@@ -1238,18 +1337,43 @@ class MainWindow(QMainWindow):
             from ..hpc.job_manager import HPCJobManager, HPCConfig
 
             if action == "Submit job":
-                backends = ["local", "slurm", "pbs"]
+                backends = ["local", "slurm", "pbs", "aws"]
                 backend, ok = QInputDialog.getItem(
                     self, "HPC Backend", "Select backend:", backends, 0, False
                 )
                 if not ok:
                     return
 
-                nodes, ok = QInputDialog.getInt(
-                    self, "HPC Submit", "Number of nodes:", 1, 1, 1000
-                )
-                if not ok:
-                    return
+                config_kwargs: dict = {"backend": backend}
+
+                if backend == "aws":
+                    region, ok = QInputDialog.getText(
+                        self, "AWS Region", "AWS region:", text="us-east-1"
+                    )
+                    if not ok:
+                        return
+                    queue, ok = QInputDialog.getText(
+                        self, "AWS Job Queue", "AWS Batch job queue name:"
+                    )
+                    if not ok or not queue:
+                        return
+                    bucket, ok = QInputDialog.getText(
+                        self, "AWS S3 Bucket", "S3 bucket for case data:"
+                    )
+                    if not ok or not bucket:
+                        return
+                    config_kwargs.update(
+                        aws_region=region,
+                        aws_job_queue=queue,
+                        aws_s3_bucket=bucket,
+                    )
+                else:
+                    nodes, ok = QInputDialog.getInt(
+                        self, "HPC Submit", "Number of nodes:", 1, 1, 1000
+                    )
+                    if not ok:
+                        return
+                    config_kwargs["max_nodes"] = nodes
 
                 walltime, ok = QInputDialog.getText(
                     self, "HPC Submit", "Wall time (HH:MM:SS):", text="2:00:00"
@@ -1263,7 +1387,7 @@ class MainWindow(QMainWindow):
                 if not case_dir:
                     return
 
-                config = HPCConfig(backend=backend, max_nodes=nodes, walltime=walltime)
+                config = HPCConfig(**config_kwargs)
                 manager = HPCJobManager(config)
                 job_id = manager.submit_job(case_dir=case_dir, walltime=walltime)
 
@@ -1303,6 +1427,32 @@ class MainWindow(QMainWindow):
                     QMessageBox.information(self, "Job Cancelled", f"Job {job_id} cancelled.")
                 else:
                     QMessageBox.warning(self, "Cancel Failed", f"Could not cancel job {job_id}")
+
+            elif action == "Download results":
+                job_id, ok = QInputDialog.getText(
+                    self, "HPC Download", "Job ID:"
+                )
+                if not ok or not job_id:
+                    return
+
+                output_dir = QFileDialog.getExistingDirectory(
+                    self, "Select Output Directory"
+                )
+                if not output_dir:
+                    return
+
+                manager = HPCJobManager()
+                success = manager.download_results(job_id, output_dir)
+                if success:
+                    QMessageBox.information(
+                        self, "Download Complete",
+                        f"Results for job {job_id} downloaded to:\n{output_dir}"
+                    )
+                else:
+                    QMessageBox.warning(
+                        self, "Download Failed",
+                        f"Could not download results for job {job_id}"
+                    )
 
         except Exception as e:
             QMessageBox.warning(self, "HPC Error", f"{e}\n\n{traceback.format_exc()}")

@@ -67,12 +67,18 @@ class MeshPanel(QWidget):
 
     def show_quality_report(self, report: dict) -> None:
         """Display a mesh quality report."""
+        def _fmt(key: str, precision: int = 2) -> str:
+            val = report.get(key)
+            if val is None:
+                return "N/A"
+            return f"{val:.{precision}f}"
+
         lines = [
             f"Cells: {report.get('n_cells', 'N/A')}",
             f"Points: {report.get('n_points', 'N/A')}",
-            f"Max Aspect Ratio: {report.get('aspect_ratio_max', 'N/A'):.2f}",
-            f"Mean Aspect Ratio: {report.get('aspect_ratio_mean', 'N/A'):.2f}",
-            f"Max Skewness: {report.get('skewness_max', 'N/A'):.3f}",
-            f"Mean Skewness: {report.get('skewness_mean', 'N/A'):.3f}",
+            f"Max Aspect Ratio: {_fmt('aspect_ratio_max')}",
+            f"Mean Aspect Ratio: {_fmt('aspect_ratio_mean')}",
+            f"Max Skewness: {_fmt('skewness_max', 3)}",
+            f"Mean Skewness: {_fmt('skewness_mean', 3)}",
         ]
         self._quality_text.setPlainText("\n".join(lines))

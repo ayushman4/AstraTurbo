@@ -629,13 +629,13 @@ class TestSurrogateModel:
 
         metrics = trainer.train_model(X, Y, model_type="mlp")
 
-        # MLP with small data may not be highly accurate; just check it learned something
-        assert metrics["r2_score"] > -1.0  # Not completely random
+        # MLP with small data may not be highly accurate; but should learn the basic pattern
+        assert metrics["r2_score"] > 0.0  # Must do better than predicting the mean
 
         x_test = np.array([0.5, 0.5])
         mean, std = trainer.predict(x_test)
         # y(0.5, 0.5) = 0.5
-        assert abs(mean[0] - 0.5) < 1.0  # Reasonable prediction
+        assert abs(mean[0] - 0.5) < 0.5  # Reasonable prediction within 0.5 tolerance
 
     def test_doe_generation(self):
         """DOE should generate correct number of space-filling samples."""
@@ -781,6 +781,151 @@ class TestHPCJobManager:
 
         jobs = manager.list_jobs()
         assert len(jobs) >= 2
+
+
+class TestAWSBatchBackend:
+    """Test AWSBatchBackend with mocked boto3 clients."""
+
+    def _make_backend(self, tmp_path):
+        """Create an AWSBatchBackend with mocked clients (bypasses credential check)."""
+        from unittest.mock import MagicMock, patch
+        from astraturbo.hpc.job_manager import AWSBatchBackend, HPCConfig
+
+        config = HPCConfig(
+            backend="aws",
+            aws_region="us-east-1",
+            aws_job_queue="test-queue",
+            aws_job_definition="test-def",
+            aws_s3_bucket="test-bucket",
+            aws_s3_prefix="astraturbo",
+            aws_container_image="openfoam/openfoam2312-default:latest",
+        )
+
+        # Bypass _validate_config by patching it out during construction
+        with patch.object(AWSBatchBackend, '_validate_config'):
+            backend = AWSBatchBackend(config)
+
+        # Inject mock clients
+        backend._batch_client = MagicMock()
+        backend._s3_client = MagicMock()
+
+        return backend
+
+    def test_submit_job(self, tmp_path):
+        """submit() should upload case to S3 and call batch.submit_job."""
+        from unittest.mock import MagicMock
+        backend = self._make_backend(tmp_path)
+
+        # Create a minimal case directory
+        case_dir = tmp_path / "case"
+        case_dir.mkdir()
+        (case_dir / "system").mkdir()
+        (case_dir / "system" / "controlDict").write_text("FoamFile {}")
+
+        backend._batch_client.submit_job.return_value = {"jobId": "aws-12345"}
+
+        job_id = backend.submit(
+            case_dir=str(case_dir),
+            solver="openfoam",
+            n_procs=4,
+            job_name="test_aws",
+            walltime="2:00:00",
+        )
+
+        assert job_id == "aws-12345"
+        backend._batch_client.submit_job.assert_called_once()
+        # S3 upload should have been called for the file
+        assert backend._s3_client.upload_file.call_count >= 1
+
+    def test_check_status_running(self, tmp_path):
+        """check_status should map RUNNING to JobStatus.RUNNING."""
+        from astraturbo.hpc.job_manager import JobStatus
+        backend = self._make_backend(tmp_path)
+
+        backend._batch_client.describe_jobs.return_value = {
+            "jobs": [{"status": "RUNNING"}]
+        }
+
+        assert backend.check_status("aws-12345") == JobStatus.RUNNING
+
+    def test_check_status_succeeded(self, tmp_path):
+        """check_status should map SUCCEEDED to JobStatus.COMPLETED."""
+        from astraturbo.hpc.job_manager import JobStatus
+        backend = self._make_backend(tmp_path)
+
+        backend._batch_client.describe_jobs.return_value = {
+            "jobs": [{"status": "SUCCEEDED"}]
+        }
+
+        assert backend.check_status("aws-12345") == JobStatus.COMPLETED
+
+    def test_check_status_unknown_job(self, tmp_path):
+        """check_status for unknown job should return UNKNOWN."""
+        from astraturbo.hpc.job_manager import JobStatus
+        backend = self._make_backend(tmp_path)
+
+        backend._batch_client.describe_jobs.return_value = {"jobs": []}
+
+        assert backend.check_status("nonexistent") == JobStatus.UNKNOWN
+
+    def test_cancel_job(self, tmp_path):
+        """cancel() should call cancel_job on the Batch client."""
+        backend = self._make_backend(tmp_path)
+
+        result = backend.cancel("aws-12345")
+
+        assert result is True
+        backend._batch_client.cancel_job.assert_called_once_with(
+            jobId="aws-12345", reason="Cancelled by AstraTurbo"
+        )
+
+    def test_cancel_falls_back_to_terminate(self, tmp_path):
+        """cancel() should try terminate_job if cancel_job raises."""
+        backend = self._make_backend(tmp_path)
+        backend._batch_client.cancel_job.side_effect = Exception("already running")
+
+        result = backend.cancel("aws-12345")
+
+        assert result is True
+        backend._batch_client.terminate_job.assert_called_once_with(
+            jobId="aws-12345", reason="Cancelled by AstraTurbo"
+        )
+
+    def test_download_results(self, tmp_path):
+        """download_results should fetch files from S3 output prefix."""
+        from unittest.mock import MagicMock
+        backend = self._make_backend(tmp_path)
+
+        backend._batch_client.describe_jobs.return_value = {
+            "jobs": [{"jobName": "test_aws"}]
+        }
+
+        # Mock S3 paginator
+        mock_paginator = MagicMock()
+        mock_paginator.paginate.return_value = [
+            {
+                "Contents": [
+                    {"Key": "astraturbo/test_aws/output/solver.log"},
+                    {"Key": "astraturbo/test_aws/output/postProcessing/data.csv"},
+                ]
+            }
+        ]
+        backend._s3_client.get_paginator.return_value = mock_paginator
+
+        output_dir = tmp_path / "results"
+        result = backend.download_results("aws-12345", str(output_dir))
+
+        assert result is True
+        assert backend._s3_client.download_file.call_count == 2
+
+    def test_parse_walltime(self, tmp_path):
+        """_parse_walltime should convert HH:MM:SS to seconds."""
+        from astraturbo.hpc.job_manager import AWSBatchBackend
+
+        assert AWSBatchBackend._parse_walltime("2:00:00") == 7200
+        assert AWSBatchBackend._parse_walltime("0:30:00") == 1800
+        assert AWSBatchBackend._parse_walltime("1:30") == 90
+        assert AWSBatchBackend._parse_walltime("invalid") == 86400
 
 
 # ────────────────────────────────────────────────────────────────

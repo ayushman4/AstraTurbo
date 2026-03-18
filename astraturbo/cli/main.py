@@ -189,14 +189,29 @@ def main():
     hpc_sub = hpc_parser.add_subparsers(dest="hpc_command")
     hpc_submit = hpc_sub.add_parser("submit", help="Submit a CFD job")
     hpc_submit.add_argument("case", help="Path to case directory")
-    hpc_submit.add_argument("--backend", choices=["local", "slurm", "pbs"], default="local",
+    hpc_submit.add_argument("--backend", choices=["local", "slurm", "pbs", "aws"], default="local",
                             help="HPC backend (default: local)")
+    hpc_submit.add_argument("--solver", choices=["openfoam", "su2"], default="openfoam",
+                            help="CFD solver (default: openfoam)")
+    hpc_submit.add_argument("--nprocs", type=int, default=1, help="Number of MPI processes")
     hpc_submit.add_argument("--nodes", type=int, default=1, help="Number of nodes")
     hpc_submit.add_argument("--walltime", default="2:00:00", help="Wall time limit (HH:MM:SS)")
+    hpc_submit.add_argument("--host", default="", help="Remote hostname (for slurm/pbs)")
+    hpc_submit.add_argument("--user", default="", help="Remote username (for slurm/pbs)")
+    hpc_submit.add_argument("--ssh-key", default="", help="SSH key path (for slurm/pbs)")
+    # AWS Batch options
+    hpc_submit.add_argument("--aws-region", default="us-east-1", help="AWS region (for aws backend)")
+    hpc_submit.add_argument("--aws-job-queue", default="", help="AWS Batch job queue name")
+    hpc_submit.add_argument("--aws-job-definition", default="", help="AWS Batch job definition name/ARN")
+    hpc_submit.add_argument("--aws-s3-bucket", default="", help="S3 bucket for case data")
+    hpc_submit.add_argument("--aws-container-image", default="", help="Docker image for solver")
     hpc_status = hpc_sub.add_parser("status", help="Check job status")
     hpc_status.add_argument("job_id", help="Job ID to check")
     hpc_cancel = hpc_sub.add_parser("cancel", help="Cancel a running job")
     hpc_cancel.add_argument("job_id", help="Job ID to cancel")
+    hpc_download = hpc_sub.add_parser("download", help="Download job results")
+    hpc_download.add_argument("job_id", help="Job ID to download results for")
+    hpc_download.add_argument("--output-dir", default=".", help="Local directory for results (default: .)")
 
     # --- sweep ---
     sw_parser = subparsers.add_parser("sweep", help="Run a parametric sweep")
@@ -285,7 +300,6 @@ def _cmd_ai(args):
     else:
         # Interactive chat mode
         chat_cli()
-        sys.exit(1)
 
 
 def _cmd_profile(args):
@@ -348,6 +362,10 @@ def _cmd_mesh(args):
     from astraturbo.mesh.multiblock import generate_blade_passage_mesh
 
     # Load profile
+    prof_path = Path(args.profile)
+    if not prof_path.exists():
+        print(f"ERROR: Profile file not found: {prof_path}")
+        sys.exit(1)
     profile = np.loadtxt(args.profile, delimiter=",", skiprows=1)
     if profile.shape[1] < 2:
         print(f"ERROR: Profile file must have at least 2 columns (x, y)")
@@ -636,10 +654,11 @@ def _cmd_fea(args):
         print(f"\n  Next steps:")
         print(f"    cd {output} && bash run_fea.sh  (requires CalculiX)")
     else:
-        print("No --surface file provided. Use --list-materials to see materials.")
+        print("No --surface file provided. A blade surface CSV is required for FEA setup.")
         print("Example:")
         print(f"  python -m astraturbo fea --material {args.material} "
               f"--omega {args.omega} --surface blade_surface.csv -o fea_case")
+        print("\nUse --list-materials to see available material options.")
 
 
 def _cmd_optimize(args):
@@ -649,6 +668,9 @@ def _cmd_optimize(args):
     )
     from astraturbo.mesh.multiblock import generate_blade_passage_mesh
 
+    if not Path(args.profile).exists():
+        print(f"ERROR: Profile file not found: {args.profile}")
+        sys.exit(1)
     profile = np.loadtxt(args.profile, delimiter=",", skiprows=1)[:, :2]
     print(f"Base profile: {len(profile)} points from {args.profile}")
     print(f"Running optimization: {args.generations} generations, population {args.population}")
@@ -735,6 +757,9 @@ def _cmd_multistage(args):
 
     gen = MultistageGenerator()
     for name, prof_path, pitch in zip(names, args.profiles, args.pitches):
+        if not Path(prof_path).exists():
+            print(f"ERROR: Profile file not found: {prof_path}")
+            sys.exit(1)
         profile = np.loadtxt(prof_path, delimiter=",", skiprows=1)[:, :2]
         print(f"  {name}: {len(profile)} points, pitch={pitch}")
         gen.add_row(name, RowMeshConfig(
@@ -793,9 +818,9 @@ def _cmd_run(args):
         except FileNotFoundError:
             print("ERROR: CalculiX (ccx) not found in PATH. Install CalculiX first.")
             sys.exit(1)
-        return
+        return  # CalculiX handled above
 
-    if hasattr(result, "success"):
+    if hasattr(result, "success"):  # noqa: F821 — result set in openfoam/su2 branches
         if result.success:
             print(f"Solver completed successfully.")
             if result.log_file:
@@ -893,8 +918,16 @@ def _cmd_smooth(args):
                                 gc = zone[gc_name]
                                 if isinstance(gc, h5py.Group):
                                     if "CoordinateX" in gc and "CoordinateY" in gc:
-                                        cx = gc["CoordinateX"][:]
-                                        cy = gc["CoordinateY"][:]
+                                        # CGNS stores coordinates as groups
+                                        # with a " data" child dataset
+                                        cx_node = gc["CoordinateX"]
+                                        cy_node = gc["CoordinateY"]
+                                        if isinstance(cx_node, h5py.Group):
+                                            cx = cx_node[" data"][:].squeeze()
+                                            cy = cy_node[" data"][:].squeeze()
+                                        else:
+                                            cx = cx_node[:].squeeze()
+                                            cy = cy_node[:].squeeze()
                                         if cx.ndim == 2:
                                             ni, nj = cx.shape
                                             block = np.zeros((ni, nj, 2))
@@ -980,34 +1013,108 @@ def _cmd_hpc(args):
     """HPC job management."""
     from astraturbo.hpc.job_manager import HPCJobManager, HPCConfig, JobStatus
 
+    # Job registry file for persisting job state across CLI invocations
+    job_registry = Path.home() / ".astraturbo" / "jobs.json"
+
+    def _load_registry() -> dict:
+        if job_registry.exists():
+            import json
+            try:
+                return json.loads(job_registry.read_text())
+            except (json.JSONDecodeError, OSError):
+                return {}
+        return {}
+
+    def _save_registry(registry: dict) -> None:
+        import json
+        job_registry.parent.mkdir(parents=True, exist_ok=True)
+        job_registry.write_text(json.dumps(registry, indent=2))
+
+    def _config_from_registry(info: dict) -> HPCConfig:
+        """Reconstruct HPCConfig from persisted job registry entry."""
+        return HPCConfig(
+            backend=info.get("backend", "local"),
+            host=info.get("host", ""),
+            user=info.get("user", ""),
+            ssh_key=info.get("ssh_key", ""),
+            aws_region=info.get("aws_region", "us-east-1"),
+            aws_job_queue=info.get("aws_job_queue", ""),
+            aws_job_definition=info.get("aws_job_definition", ""),
+            aws_s3_bucket=info.get("aws_s3_bucket", ""),
+            aws_container_image=info.get("aws_container_image", ""),
+        )
+
     if args.hpc_command == "submit":
         config = HPCConfig(
             backend=args.backend,
             max_nodes=args.nodes,
             walltime=args.walltime,
+            host=args.host,
+            user=args.user,
+            ssh_key=args.ssh_key,
+            aws_region=args.aws_region,
+            aws_job_queue=args.aws_job_queue,
+            aws_job_definition=args.aws_job_definition,
+            aws_s3_bucket=args.aws_s3_bucket,
+            aws_container_image=args.aws_container_image,
         )
         manager = HPCJobManager(config)
         try:
             job_id = manager.submit_job(
                 case_dir=args.case,
+                solver=args.solver,
+                n_procs=args.nprocs,
                 walltime=args.walltime,
             )
+            # Persist job info for later status/cancel/download calls
+            registry = _load_registry()
+            registry[job_id] = {
+                "backend": args.backend,
+                "case": str(Path(args.case).resolve()),
+                "solver": args.solver,
+                "nprocs": args.nprocs,
+                "host": args.host,
+                "user": args.user,
+                "ssh_key": args.ssh_key,
+                "aws_region": args.aws_region,
+                "aws_job_queue": args.aws_job_queue,
+                "aws_job_definition": args.aws_job_definition,
+                "aws_s3_bucket": args.aws_s3_bucket,
+                "aws_container_image": args.aws_container_image,
+            }
+            _save_registry(registry)
+
             print(f"Job submitted: {job_id}")
-            print(f"  Backend: {args.backend}")
-            print(f"  Nodes: {args.nodes}")
+            print(f"  Backend:  {args.backend}")
+            print(f"  Solver:   {args.solver}")
+            print(f"  Procs:    {args.nprocs}")
+            print(f"  Nodes:    {args.nodes}")
             print(f"  Walltime: {args.walltime}")
-            print(f"  Case: {args.case}")
+            print(f"  Case:     {args.case}")
+            if args.backend == "aws":
+                print(f"  Region:   {args.aws_region}")
+                print(f"  S3:       {args.aws_s3_bucket}")
         except Exception as e:
             print(f"ERROR: Job submission failed: {e}")
             sys.exit(1)
 
     elif args.hpc_command == "status":
-        manager = HPCJobManager()
+        registry = _load_registry()
+        info = registry.get(args.job_id, {})
+        config = _config_from_registry(info)
+        manager = HPCJobManager(config)
         status = manager.check_status(args.job_id)
         print(f"Job {args.job_id}: {status.value}")
+        if info:
+            print(f"  Backend: {info.get('backend')}")
+            print(f"  Case:    {info.get('case')}")
+            print(f"  Solver:  {info.get('solver')}")
 
     elif args.hpc_command == "cancel":
-        manager = HPCJobManager()
+        registry = _load_registry()
+        info = registry.get(args.job_id, {})
+        config = _config_from_registry(info)
+        manager = HPCJobManager(config)
         success = manager.cancel_job(args.job_id)
         if success:
             print(f"Job {args.job_id} cancelled.")
@@ -1015,8 +1122,20 @@ def _cmd_hpc(args):
             print(f"ERROR: Could not cancel job {args.job_id}")
             sys.exit(1)
 
+    elif args.hpc_command == "download":
+        registry = _load_registry()
+        info = registry.get(args.job_id, {})
+        config = _config_from_registry(info)
+        manager = HPCJobManager(config)
+        success = manager.download_results(args.job_id, args.output_dir)
+        if success:
+            print(f"Results downloaded to: {args.output_dir}")
+        else:
+            print(f"ERROR: Could not download results for job {args.job_id}")
+            sys.exit(1)
+
     else:
-        print("Usage: astraturbo hpc {submit|status|cancel}")
+        print("Usage: astraturbo hpc {submit|status|cancel|download}")
         sys.exit(1)
 
 

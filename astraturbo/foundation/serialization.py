@@ -90,13 +90,32 @@ def import_bladedesigner_xml(filepath: str | Path) -> dict:
     The returned dict can be used to construct AstraTurbo objects.
     """
     import xml.etree.ElementTree as ET
-    from xml.etree.ElementTree import XMLParser
 
     filepath = Path(filepath)
 
-    # Security: use defused parsing — disable DTD and external entities
-    parser = XMLParser()
-    tree = ET.parse(filepath, parser=parser)
+    # Security: disable DTD and external entity processing to prevent XXE attacks
+    # Using XMLParser with a TreeBuilder and disabling entity expansion
+    class _DefusedParser:
+        """Minimal safe XML parser that rejects DTDs and external entities."""
+        def __init__(self):
+            self._parser = ET.XMLParser()
+
+        def feed(self, data):
+            # Reject documents with DOCTYPE declarations
+            if b"<!DOCTYPE" in data or b"<!ENTITY" in data:
+                raise ValueError("XML document contains DOCTYPE or ENTITY declaration, rejected for security")
+            self._parser.feed(data)
+
+        def close(self):
+            return self._parser.close()
+
+    raw = filepath.read_bytes()
+    if b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
+        raise ValueError(
+            f"XML file {filepath} contains DOCTYPE/ENTITY declarations. "
+            "This is rejected for security reasons (XXE prevention)."
+        )
+    tree = ET.parse(filepath)
     root = tree.getroot()
 
     def _element_to_dict(element: ET.Element) -> dict:

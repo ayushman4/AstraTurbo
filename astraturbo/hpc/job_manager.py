@@ -63,7 +63,7 @@ class HPCConfig:
     ssh_port: int = 22
 
     # Backend
-    backend: str = "local"               # 'slurm', 'pbs', 'local'
+    backend: str = "local"               # 'slurm', 'pbs', 'local', 'aws'
 
     # Queue/partition
     queue: str = "default"
@@ -86,6 +86,18 @@ class HPCConfig:
     # Job defaults
     default_solver: str = "openfoam"
     email_notification: str = ""         # Email for job notifications
+
+    # AWS Batch settings
+    aws_region: str = "us-east-1"
+    aws_job_queue: str = ""              # AWS Batch job queue name
+    aws_job_definition: str = ""         # AWS Batch job definition name/ARN
+    aws_s3_bucket: str = ""              # S3 bucket for case upload/download
+    aws_s3_prefix: str = "astraturbo"    # S3 key prefix for job data
+    aws_container_image: str = ""        # Docker image for the solver
+    aws_vcpus: int = 4                   # vCPUs per container
+    aws_memory_mb: int = 8192            # Container memory in MB
+    aws_gpu_count: int = 0               # GPUs per container
+    aws_platform: str = "EC2"            # 'EC2' or 'FARGATE'
 
 
 @dataclass
@@ -387,6 +399,9 @@ class PBSBackend(HPCBackend):
         if cfg.queue != "default":
             script_lines.append(f"#PBS -q {cfg.queue}")
 
+        if cfg.gpu and cfg.gpu_count > 0:
+            script_lines.append(f"#PBS -l gpus={cfg.gpu_count}")
+
         if cfg.email_notification:
             script_lines.append(f"#PBS -M {cfg.email_notification}")
             script_lines.append("#PBS -m ae")
@@ -519,7 +534,7 @@ class LocalBackend(HPCBackend):
             else:
                 cmd = ["SU2_CFD", str(cfg_file)]
         else:
-            cmd = ["bash", "-c", f"echo 'Unknown solver: {solver}'"]
+            cmd = ["echo", f"Unknown solver: {solver}"]
 
         # Start subprocess
         log_file = case_path / f"{job_name}.log"
@@ -610,6 +625,413 @@ class LocalBackend(HPCBackend):
             return False
 
 
+class AWSBatchBackend(HPCBackend):
+    """AWS Batch backend for cloud-based CFD execution.
+
+    Submits CFD jobs to AWS Batch, with case data transferred via S3.
+    Requires boto3 and configured AWS credentials (env vars, ~/.aws/credentials,
+    or IAM role).
+
+    Workflow:
+      1. Upload case directory to S3
+      2. Submit AWS Batch job (container pulls case from S3, runs solver)
+      3. Poll job status via Batch API
+      4. Download results from S3 when complete
+
+    The container image must include the solver (OpenFOAM, SU2, etc.)
+    and the aws cli for S3 transfers.
+    """
+
+    def __init__(self, config: HPCConfig) -> None:
+        super().__init__(config)
+        self._batch_client: Any = None
+        self._s3_client: Any = None
+        # Validate configuration early
+        self._validate_config()
+
+    def _validate_config(self) -> None:
+        """Validate AWS config and credentials at init time."""
+        try:
+            import boto3
+        except ImportError:
+            raise ImportError(
+                "boto3 is required for the AWS Batch backend. "
+                "Install it with: pip install 'astraturbo[aws]'"
+            )
+
+        cfg = self.config
+        if not cfg.aws_s3_bucket:
+            raise ValueError(
+                "aws_s3_bucket is required for the AWS backend. "
+                "Set it via --aws-s3-bucket or HPCConfig(aws_s3_bucket=...)"
+            )
+        if not cfg.aws_job_queue:
+            raise ValueError(
+                "aws_job_queue is required for the AWS backend. "
+                "Set it via --aws-job-queue or HPCConfig(aws_job_queue=...)"
+            )
+
+        # Verify credentials are available (STS get-caller-identity)
+        try:
+            sts = boto3.client("sts", region_name=cfg.aws_region)
+            sts.get_caller_identity()
+        except Exception as e:
+            raise RuntimeError(
+                f"AWS credential check failed: {e}. "
+                "Ensure AWS credentials are configured (env vars, ~/.aws/credentials, or IAM role)."
+            ) from e
+
+    def _get_batch_client(self) -> Any:
+        """Lazy-init AWS Batch client."""
+        if self._batch_client is None:
+            try:
+                import boto3
+            except ImportError:
+                raise ImportError(
+                    "boto3 is required for the AWS Batch backend. "
+                    "Install it with: pip install 'astraturbo[aws]'"
+                )
+            self._batch_client = boto3.client(
+                "batch", region_name=self.config.aws_region
+            )
+        return self._batch_client
+
+    def _get_s3_client(self) -> Any:
+        """Lazy-init S3 client."""
+        if self._s3_client is None:
+            try:
+                import boto3
+            except ImportError:
+                raise ImportError(
+                    "boto3 is required for the AWS Batch backend. "
+                    "Install it with: pip install 'astraturbo[aws]'"
+                )
+            self._s3_client = boto3.client(
+                "s3", region_name=self.config.aws_region
+            )
+        return self._s3_client
+
+    def _s3_case_key(self, job_name: str) -> str:
+        """S3 key prefix for a job's case data."""
+        prefix = self.config.aws_s3_prefix.strip("/")
+        return f"{prefix}/{job_name}"
+
+    def _upload_case_to_s3(self, case_dir: str, job_name: str) -> str:
+        """Upload case directory to S3.
+
+        Args:
+            case_dir: Local path to case directory.
+            job_name: Job name used as S3 sub-prefix.
+
+        Returns:
+            S3 URI (s3://bucket/prefix/job_name).
+        """
+        s3 = self._get_s3_client()
+        bucket = self.config.aws_s3_bucket
+        s3_prefix = self._s3_case_key(job_name)
+        case_path = Path(case_dir).resolve()
+
+        if not case_path.is_dir():
+            raise FileNotFoundError(f"Case directory not found: {case_path}")
+
+        for root, _dirs, files in os.walk(case_path):
+            for filename in files:
+                local_file = Path(root) / filename
+                rel_path = local_file.relative_to(case_path)
+                s3_key = f"{s3_prefix}/input/{rel_path}"
+                s3.upload_file(str(local_file), bucket, s3_key)
+
+        return f"s3://{bucket}/{s3_prefix}"
+
+    def submit(
+        self,
+        case_dir: str,
+        solver: str,
+        n_procs: int,
+        job_name: str,
+        walltime: str,
+    ) -> str:
+        """Submit a job to AWS Batch.
+
+        Uploads the case to S3 and submits a Batch job that:
+          1. Downloads the case from S3
+          2. Runs the solver
+          3. Uploads results back to S3
+
+        Args:
+            case_dir: Local case directory to upload.
+            solver: Solver name ('openfoam', 'su2').
+            n_procs: Number of vCPUs to request.
+            job_name: Job name.
+            walltime: Wall time (used to set Batch timeout).
+
+        Returns:
+            AWS Batch job ID.
+        """
+        cfg = self.config
+        batch = self._get_batch_client()
+
+        # Upload case to S3
+        s3_uri = self._upload_case_to_s3(case_dir, job_name)
+        s3_input = f"{s3_uri}/input"
+        s3_output = f"{s3_uri}/output"
+
+        # Parse walltime to seconds for Batch timeout
+        timeout_seconds = self._parse_walltime(walltime)
+
+        # Build container command
+        solver_cmd = self._get_solver_command(solver, n_procs)
+        container_cmd = [
+            "bash", "-c",
+            f"aws s3 sync {s3_input} /workdir/ && "
+            f"cd /workdir && {solver_cmd} && "
+            f"aws s3 sync /workdir/ {s3_output}"
+        ]
+
+        # Resource requirements
+        resource_requirements = [
+            {"type": "VCPU", "value": str(n_procs or cfg.aws_vcpus)},
+            {"type": "MEMORY", "value": str(cfg.aws_memory_mb)},
+        ]
+
+        if cfg.aws_gpu_count > 0:
+            resource_requirements.append(
+                {"type": "GPU", "value": str(cfg.aws_gpu_count)}
+            )
+
+        # Build submit parameters
+        submit_params: dict[str, Any] = {
+            "jobName": job_name,
+            "jobQueue": cfg.aws_job_queue,
+            "timeout": {"attemptDurationSeconds": timeout_seconds},
+        }
+
+        if cfg.aws_job_definition:
+            # Use a pre-registered job definition
+            submit_params["jobDefinition"] = cfg.aws_job_definition
+            submit_params["containerOverrides"] = {
+                "command": container_cmd,
+                "resourceRequirements": resource_requirements,
+            }
+            if cfg.aws_container_image:
+                submit_params["containerOverrides"]["image"] = cfg.aws_container_image
+        else:
+            # Register a one-off job definition
+            job_def_name = f"astraturbo-{solver}-{job_name}"
+            self._register_job_definition(
+                job_def_name, solver, container_cmd, resource_requirements
+            )
+            submit_params["jobDefinition"] = job_def_name
+            submit_params["containerOverrides"] = {
+                "command": container_cmd,
+                "resourceRequirements": resource_requirements,
+            }
+
+        # Environment variables for the container
+        env_vars = [
+            {"name": "ASTRATURBO_S3_INPUT", "value": s3_input},
+            {"name": "ASTRATURBO_S3_OUTPUT", "value": s3_output},
+            {"name": "ASTRATURBO_SOLVER", "value": solver},
+            {"name": "ASTRATURBO_NPROCS", "value": str(n_procs)},
+        ]
+        submit_params.setdefault("containerOverrides", {})
+        submit_params["containerOverrides"]["environment"] = env_vars
+
+        response = batch.submit_job(**submit_params)
+        return response["jobId"]
+
+    def _register_job_definition(
+        self,
+        name: str,
+        solver: str,
+        command: list[str],
+        resource_requirements: list[dict[str, str]],
+    ) -> None:
+        """Register a one-off AWS Batch job definition.
+
+        Args:
+            name: Job definition name.
+            solver: Solver name (used to pick default image).
+            command: Container command.
+            resource_requirements: vCPU/memory/GPU requirements.
+        """
+        batch = self._get_batch_client()
+        cfg = self.config
+
+        image = cfg.aws_container_image
+        if not image:
+            # Default public OpenFOAM images as fallback
+            image_map = {
+                "openfoam": "openfoam/openfoam2312-default:latest",
+                "su2": "su2code/su2:latest",
+            }
+            image = image_map.get(solver, "ubuntu:22.04")
+
+        platform = "FARGATE" if cfg.aws_platform.upper() == "FARGATE" else "EC2"
+
+        container_props: dict[str, Any] = {
+            "image": image,
+            "command": command,
+            "resourceRequirements": resource_requirements,
+        }
+
+        if platform == "FARGATE":
+            container_props["networkConfiguration"] = {
+                "assignPublicIp": "ENABLED"
+            }
+
+        batch.register_job_definition(
+            jobDefinitionName=name,
+            type="container",
+            platformCapabilities=[platform],
+            containerProperties=container_props,
+            timeout={"attemptDurationSeconds": 86400},
+        )
+
+    def check_status(self, job_id: str) -> JobStatus:
+        """Check AWS Batch job status.
+
+        Args:
+            job_id: AWS Batch job ID.
+
+        Returns:
+            Mapped JobStatus.
+        """
+        batch = self._get_batch_client()
+
+        try:
+            response = batch.describe_jobs(jobs=[job_id])
+        except Exception:
+            return JobStatus.UNKNOWN
+
+        jobs = response.get("jobs", [])
+        if not jobs:
+            return JobStatus.UNKNOWN
+
+        batch_status = jobs[0].get("status", "UNKNOWN")
+
+        status_map = {
+            "SUBMITTED": JobStatus.PENDING,
+            "PENDING": JobStatus.PENDING,
+            "RUNNABLE": JobStatus.PENDING,
+            "STARTING": JobStatus.RUNNING,
+            "RUNNING": JobStatus.RUNNING,
+            "SUCCEEDED": JobStatus.COMPLETED,
+            "FAILED": JobStatus.FAILED,
+        }
+
+        return status_map.get(batch_status, JobStatus.UNKNOWN)
+
+    def cancel(self, job_id: str) -> bool:
+        """Cancel an AWS Batch job.
+
+        Uses cancel_job for PENDING/RUNNABLE jobs,
+        terminate_job for RUNNING jobs.
+
+        Args:
+            job_id: AWS Batch job ID.
+
+        Returns:
+            True if the cancellation API call succeeded.
+        """
+        batch = self._get_batch_client()
+
+        try:
+            # Try cancel first (for queued jobs)
+            batch.cancel_job(jobId=job_id, reason="Cancelled by AstraTurbo")
+            return True
+        except Exception:
+            pass
+
+        try:
+            # Terminate running jobs
+            batch.terminate_job(jobId=job_id, reason="Cancelled by AstraTurbo")
+            return True
+        except Exception:
+            return False
+
+    def download_results(self, job_id: str, local_dir: str) -> bool:
+        """Download results from S3 after job completion.
+
+        Looks up the job name from AWS Batch, then syncs
+        the output prefix from S3 to the local directory.
+
+        Args:
+            job_id: AWS Batch job ID.
+            local_dir: Local directory to download into.
+
+        Returns:
+            True if download succeeded.
+        """
+        batch = self._get_batch_client()
+        s3 = self._get_s3_client()
+
+        try:
+            response = batch.describe_jobs(jobs=[job_id])
+            jobs = response.get("jobs", [])
+            if not jobs:
+                return False
+
+            job_name = jobs[0].get("jobName", "")
+            if not job_name:
+                return False
+        except Exception:
+            return False
+
+        bucket = self.config.aws_s3_bucket
+        s3_prefix = f"{self._s3_case_key(job_name)}/output/"
+
+        dst = Path(local_dir)
+        dst.mkdir(parents=True, exist_ok=True)
+
+        try:
+            paginator = s3.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=bucket, Prefix=s3_prefix):
+                for obj in page.get("Contents", []):
+                    s3_key = obj["Key"]
+                    rel_path = s3_key[len(s3_prefix):]
+                    if not rel_path:
+                        continue
+                    local_file = dst / rel_path
+                    local_file.parent.mkdir(parents=True, exist_ok=True)
+                    s3.download_file(bucket, s3_key, str(local_file))
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _parse_walltime(walltime: str) -> int:
+        """Parse HH:MM:SS walltime to seconds."""
+        parts = walltime.strip().split(":")
+        if len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        elif len(parts) == 2:
+            return int(parts[0]) * 60 + int(parts[1])
+        else:
+            try:
+                return int(parts[0])
+            except ValueError:
+                return 86400  # Default 24 hours
+
+    @staticmethod
+    def _get_solver_command(solver: str, n_procs: int) -> str:
+        """Generate solver command for the container."""
+        if solver == "openfoam":
+            if n_procs > 1:
+                return (
+                    "decomposePar -force && "
+                    f"mpirun -np {n_procs} simpleFoam -parallel > solver.log 2>&1 && "
+                    "reconstructPar"
+                )
+            return "simpleFoam > solver.log 2>&1"
+        elif solver == "su2":
+            if n_procs > 1:
+                return f"mpirun -np {n_procs} SU2_CFD astraturbo.cfg > solver.log 2>&1"
+            return "SU2_CFD astraturbo.cfg > solver.log 2>&1"
+        else:
+            return f"echo 'Unknown solver: {solver}'"
+
+
 class HPCJobManager:
     """High-level job manager with backend abstraction.
 
@@ -639,10 +1061,12 @@ class HPCJobManager:
             return PBSBackend(self.config)
         elif backend_type == "local":
             return LocalBackend(self.config)
+        elif backend_type == "aws":
+            return AWSBatchBackend(self.config)
         else:
             raise ValueError(
                 f"Unknown backend '{backend_type}'. "
-                f"Available: slurm, pbs, local"
+                f"Available: slurm, pbs, local, aws"
             )
 
     def submit_job(
