@@ -420,6 +420,106 @@ _register(
 
 
 # ──────────────────────────────────────────────────────
+# 12. Off-design compressor analysis
+# ──────────────────────────────────────────────────────
+
+_register(
+    "off_design_compressor",
+    "Run off-design analysis of an axial compressor at a different mass flow "
+    "and/or RPM than the design point. Blade metal angles are fixed from the "
+    "design; flow angles change, creating incidence which modifies losses, "
+    "efficiency, and pressure ratio. Returns per-stage incidence, diffusion "
+    "factor, losses, and stall/choke flags. Requires a design-point run first "
+    "(specify the same geometry parameters plus the off-design mass_flow and rpm).",
+    {
+        "type": "object",
+        "properties": {
+            "overall_pressure_ratio": {
+                "type": "number",
+                "description": "Design-point overall pressure ratio (for design geometry)",
+            },
+            "design_mass_flow": {
+                "type": "number",
+                "description": "Design-point mass flow rate (kg/s)",
+            },
+            "design_rpm": {
+                "type": "number",
+                "description": "Design-point RPM",
+            },
+            "r_hub": {
+                "type": "number",
+                "description": "Hub radius (m)",
+            },
+            "r_tip": {
+                "type": "number",
+                "description": "Tip radius (m)",
+            },
+            "off_design_mass_flow": {
+                "type": "number",
+                "description": "Off-design mass flow rate (kg/s)",
+            },
+            "off_design_rpm": {
+                "type": "number",
+                "description": "Off-design RPM",
+            },
+        },
+        "required": [
+            "overall_pressure_ratio", "design_mass_flow", "design_rpm",
+            "r_hub", "r_tip", "off_design_mass_flow", "off_design_rpm",
+        ],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
+# 13. Compressor map generation
+# ──────────────────────────────────────────────────────
+
+_register(
+    "generate_compressor_map",
+    "Generate a complete compressor performance map with speed lines and surge "
+    "line. Sweeps mass flow at multiple RPM fractions to produce pressure ratio "
+    "vs mass flow curves, identifies stall/choke boundaries, and computes surge "
+    "margin. Returns a formatted table of all speed lines plus the surge line.",
+    {
+        "type": "object",
+        "properties": {
+            "overall_pressure_ratio": {
+                "type": "number",
+                "description": "Design-point overall pressure ratio",
+            },
+            "mass_flow": {
+                "type": "number",
+                "description": "Design-point mass flow rate (kg/s)",
+            },
+            "rpm": {
+                "type": "number",
+                "description": "Design-point RPM",
+            },
+            "r_hub": {
+                "type": "number",
+                "description": "Hub radius (m)",
+            },
+            "r_tip": {
+                "type": "number",
+                "description": "Tip radius (m)",
+            },
+            "rpm_fractions": {
+                "type": "array",
+                "items": {"type": "number"},
+                "description": "RPM fractions to evaluate (default: [0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0, 1.05])",
+            },
+            "n_points": {
+                "type": "integer",
+                "description": "Number of mass flow points per speed line (default: 15)",
+            },
+        },
+        "required": ["overall_pressure_ratio", "mass_flow", "rpm", "r_hub", "r_tip"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
 # Tool execution dispatcher
 # ──────────────────────────────────────────────────────
 
@@ -448,6 +548,10 @@ def execute_tool(name: str, inputs: dict) -> str:
             return _exec_list_materials(inputs)
         elif name == "list_formats":
             return _exec_list_formats(inputs)
+        elif name == "off_design_compressor":
+            return _exec_off_design(inputs)
+        elif name == "generate_compressor_map":
+            return _exec_compressor_map(inputs)
         else:
             return f"Unknown tool: {name}"
     except Exception as e:
@@ -730,3 +834,96 @@ def _exec_list_formats(inputs: dict) -> str:
         rw = ("R" if info["read"] else "-") + ("W" if info["write"] else "-")
         lines.append(f"  [{rw}] {name:22s} {info['description']}")
     return "\n".join(lines)
+
+
+def _exec_off_design(inputs: dict) -> str:
+    from astraturbo.design import meanline_compressor, off_design_compressor
+
+    # Validate inputs
+    pr = float(inputs["overall_pressure_ratio"])
+    if not (1.01 <= pr <= 50.0):
+        return f"Error: pressure ratio {pr} out of range [1.01, 50.0]"
+
+    design_mf = float(inputs["design_mass_flow"])
+    design_rpm = float(inputs["design_rpm"])
+    r_hub = float(inputs["r_hub"])
+    r_tip = float(inputs["r_tip"])
+    od_mf = float(inputs["off_design_mass_flow"])
+    od_rpm = float(inputs["off_design_rpm"])
+
+    if r_hub <= 0 or r_tip <= 0 or r_tip <= r_hub:
+        return "Error: radii invalid (need 0 < r_hub < r_tip)"
+    if not (0.01 <= od_mf <= 10000.0):
+        return f"Error: off-design mass flow {od_mf} out of range"
+    if not (100 <= od_rpm <= 200000):
+        return f"Error: off-design RPM {od_rpm} out of range"
+
+    # Run design point first to get blade geometry
+    design_result = meanline_compressor(
+        overall_pressure_ratio=pr,
+        mass_flow=design_mf,
+        rpm=design_rpm,
+        r_hub=r_hub,
+        r_tip=r_tip,
+    )
+
+    # Run off-design
+    od_result = off_design_compressor(design_result, mass_flow=od_mf, rpm=od_rpm)
+
+    output = od_result.summary()
+    output += f"\n\nDesign point: PR={design_result.overall_pressure_ratio:.3f}, "
+    output += f"mass_flow={design_mf:.2f} kg/s, RPM={design_rpm:.0f}"
+    output += f"\nOff-design:   mass_flow={od_mf:.2f} kg/s, RPM={od_rpm:.0f}"
+
+    return output
+
+
+def _exec_compressor_map(inputs: dict) -> str:
+    from astraturbo.design import meanline_compressor, generate_compressor_map
+
+    # Validate inputs
+    pr = float(inputs["overall_pressure_ratio"])
+    if not (1.01 <= pr <= 50.0):
+        return f"Error: pressure ratio {pr} out of range [1.01, 50.0]"
+
+    mass_flow = float(inputs["mass_flow"])
+    rpm = float(inputs["rpm"])
+    r_hub = float(inputs["r_hub"])
+    r_tip = float(inputs["r_tip"])
+
+    if r_hub <= 0 or r_tip <= 0 or r_tip <= r_hub:
+        return "Error: radii invalid (need 0 < r_hub < r_tip)"
+
+    # Run design point
+    design_result = meanline_compressor(
+        overall_pressure_ratio=pr,
+        mass_flow=mass_flow,
+        rpm=rpm,
+        r_hub=r_hub,
+        r_tip=r_tip,
+    )
+
+    # Map parameters
+    rpm_fractions = inputs.get("rpm_fractions", None)
+    n_points = int(inputs.get("n_points", 15))
+    if n_points < 3 or n_points > 50:
+        return f"Error: n_points {n_points} out of range [3, 50]"
+
+    kwargs = {"n_points": n_points}
+    if rpm_fractions is not None:
+        kwargs["rpm_fractions"] = [float(f) for f in rpm_fractions]
+
+    cmap = generate_compressor_map(design_result, **kwargs)
+
+    output = cmap.summary()
+
+    # Add surge margin at design speed
+    for sl in cmap.speed_lines:
+        if abs(sl.rpm_fraction - 1.0) < 0.01 and sl.surge_point_index is not None:
+            surge_pr = sl.pressure_ratios[sl.surge_point_index]
+            design_pr = cmap.design_point.get("pr", 1.0)
+            if design_pr > 1.0:
+                sm = (surge_pr - design_pr) / design_pr
+                output += f"\n\nSurge margin at design speed: {sm:.4f} ({sm*100:.1f}%)"
+
+    return output
