@@ -141,6 +141,7 @@ class MainWindow(QMainWindow):
         compute_menu = menubar.addMenu("&Compute")
         self._add_action(compute_menu, "&Meanline Design...", self._run_meanline)
         self._add_action(compute_menu, "&Centrifugal Compressor...", self._run_centrifugal)
+        self._add_action(compute_menu, "&Turbine Meanline...", self._run_turbine_meanline)
         compute_menu.addSeparator()
         self._add_action(compute_menu, "Compute &Blade Geometry", self._compute_blade)
         self._add_action(compute_menu, "Generate Blade &Array (Full Annulus)", self._generate_blade_array)
@@ -1023,6 +1024,60 @@ class MainWindow(QMainWindow):
                     self.statusBar().showMessage(f"Report saved: {path}")
         except Exception as e:
             QMessageBox.warning(self, "Centrifugal Error", f"{e}\n\n{traceback.format_exc()}")
+
+    def _run_turbine_meanline(self) -> None:
+        """Run axial turbine meanline design from a dialog."""
+        from PySide6.QtWidgets import QInputDialog, QFileDialog
+
+        er, ok = QInputDialog.getDouble(self, "Turbine", "Expansion Ratio (P_in/P_out):", 2.5, 1.1, 20.0, 2)
+        if not ok:
+            return
+        mf, ok = QInputDialog.getDouble(self, "Turbine", "Mass Flow (kg/s):", 20.0, 0.1, 500.0, 1)
+        if not ok:
+            return
+        rpm, ok = QInputDialog.getDouble(self, "Turbine", "RPM:", 17189, 500, 200000, 0)
+        if not ok:
+            return
+        r_hub, ok = QInputDialog.getDouble(self, "Turbine", "Hub Radius (m):", 0.25, 0.01, 5.0, 3)
+        if not ok:
+            return
+        r_tip, ok = QInputDialog.getDouble(self, "Turbine", "Tip Radius (m):", 0.35, 0.02, 5.0, 3)
+        if not ok:
+            return
+        t_in, ok = QInputDialog.getDouble(self, "Turbine", "Inlet Temperature (K):", 1500.0, 300.0, 2200.0, 0)
+        if not ok:
+            return
+
+        try:
+            from ..design.turbine import meanline_turbine
+            result = meanline_turbine(
+                overall_expansion_ratio=er, mass_flow=mf, rpm=rpm,
+                r_hub=r_hub, r_tip=r_tip, T_inlet=t_in,
+            )
+
+            summary = result.summary()
+            QMessageBox.information(self, "Turbine Design", summary)
+            self.statusBar().showMessage(
+                f"Turbine: ER={result.overall_expansion_ratio:.3f}, "
+                f"eta={result.overall_efficiency:.4f}, "
+                f"work={result.total_work:.0f} J/kg"
+            )
+
+            save_report = QMessageBox.question(
+                self, "Save Report?", "Generate HTML report?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if save_report == QMessageBox.Yes:
+                path, _ = QFileDialog.getSaveFileName(
+                    self, "Save Report", "turbine_report.html", "HTML (*.html)"
+                )
+                if path:
+                    from ..reports import generate_report, ReportConfig
+                    cfg = ReportConfig(title=f"Axial Turbine — ER {er}", output_path=path)
+                    generate_report(config=cfg, turbine_result=result)
+                    self.statusBar().showMessage(f"Report saved: {path}")
+        except Exception as e:
+            QMessageBox.warning(self, "Turbine Error", f"{e}\n\n{traceback.format_exc()}")
 
     # ----------------------------------------------------------------
     # Undo / Redo

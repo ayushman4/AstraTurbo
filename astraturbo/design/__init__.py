@@ -44,6 +44,12 @@ from .centrifugal import (
     centrifugal_compressor,
     wiesner_slip_factor,
 )
+from .turbine import (
+    TurbineStageResult,
+    TurbineResult,
+    meanline_turbine,
+    meanline_to_turbine_blade_parameters,
+)
 
 __all__ = [
     "VelocityTriangle",
@@ -65,4 +71,8 @@ __all__ = [
     "CentrifugalResult",
     "centrifugal_compressor",
     "wiesner_slip_factor",
+    "TurbineStageResult",
+    "TurbineResult",
+    "meanline_turbine",
+    "meanline_to_turbine_blade_parameters",
 ]

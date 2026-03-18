@@ -945,6 +945,61 @@ _register(
 
 
 # ──────────────────────────────────────────────────────
+# 22. Turbine meanline design
+# ──────────────────────────────────────────────────────
+
+_register(
+    "meanline_turbine",
+    "Design a multi-stage axial turbine from top-level requirements. "
+    "Computes velocity triangles, blade angles, loading coefficients, "
+    "Zweifel loading, and Soderberg losses for each stage. "
+    "Returns a complete stage-by-stage design with NGV and rotor parameters.",
+    {
+        "type": "object",
+        "properties": {
+            "overall_expansion_ratio": {
+                "type": "number",
+                "description": "Total expansion ratio P_in/P_out (e.g. 2.5)",
+            },
+            "mass_flow": {
+                "type": "number",
+                "description": "Mass flow rate in kg/s",
+            },
+            "rpm": {
+                "type": "number",
+                "description": "Rotational speed in RPM",
+            },
+            "r_hub": {
+                "type": "number",
+                "description": "Hub radius in meters",
+            },
+            "r_tip": {
+                "type": "number",
+                "description": "Tip radius in meters",
+            },
+            "n_stages": {
+                "type": "integer",
+                "description": "Number of stages (omit to auto-calculate from loading limit)",
+            },
+            "reaction": {
+                "type": "number",
+                "description": "Degree of reaction per stage (default 0.5)",
+            },
+            "inlet_temp": {
+                "type": "number",
+                "description": "Inlet total temperature in K (default 1500)",
+            },
+            "inlet_pressure": {
+                "type": "number",
+                "description": "Inlet total pressure in Pa (default 101325)",
+            },
+        },
+        "required": ["overall_expansion_ratio", "mass_flow", "rpm", "r_hub", "r_tip"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
 # Tool execution dispatcher
 # ──────────────────────────────────────────────────────
 
@@ -993,6 +1048,8 @@ def execute_tool(name: str, inputs: dict) -> str:
             return _exec_centrifugal(inputs)
         elif name == "generate_report":
             return _exec_generate_report(inputs)
+        elif name == "meanline_turbine":
+            return _exec_turbine_meanline(inputs)
         else:
             return f"Unknown tool: {name}"
     except Exception as e:
@@ -1763,6 +1820,43 @@ def _exec_centrifugal(inputs: dict) -> str:
 
     result = centrifugal_compressor(**kwargs)
     return result.summary()
+
+
+def _exec_turbine_meanline(inputs: dict) -> str:
+    from astraturbo.design.turbine import meanline_turbine, meanline_to_turbine_blade_parameters
+
+    er = float(inputs["overall_expansion_ratio"])
+    if not (1.01 <= er <= 50.0):
+        return f"Error: expansion ratio {er} out of range [1.01, 50.0]"
+
+    kwargs = {
+        "overall_expansion_ratio": er,
+        "mass_flow": float(inputs["mass_flow"]),
+        "rpm": float(inputs["rpm"]),
+        "r_hub": float(inputs["r_hub"]),
+        "r_tip": float(inputs["r_tip"]),
+    }
+    if "n_stages" in inputs:
+        kwargs["n_stages"] = int(inputs["n_stages"])
+    if "reaction" in inputs:
+        kwargs["reaction"] = float(inputs["reaction"])
+    if "inlet_temp" in inputs:
+        kwargs["T_inlet"] = float(inputs["inlet_temp"])
+    if "inlet_pressure" in inputs:
+        kwargs["P_inlet"] = float(inputs["inlet_pressure"])
+
+    result = meanline_turbine(**kwargs)
+
+    summary = result.summary()
+    params = meanline_to_turbine_blade_parameters(result)
+    param_lines = []
+    for p in params:
+        param_lines.append(
+            f"Stage {p['stage']}: NGV stagger={p['ngv_stagger_deg']:.1f} deg, "
+            f"Rotor stagger={p['rotor_stagger_deg']:.1f} deg, "
+            f"Zweifel={p['zweifel']:.3f}"
+        )
+    return summary + "\n\nBlade Parameters:\n" + "\n".join(param_lines)
 
 
 def _exec_generate_report(inputs: dict) -> str:

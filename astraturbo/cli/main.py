@@ -173,6 +173,21 @@ def main():
     cent_parser.add_argument("--n-blades", type=int, default=17, help="Number of impeller blades")
     cent_parser.add_argument("--report", type=str, default=None, help="Generate HTML report to this file")
 
+    # --- turbine ---
+    turb_parser = subparsers.add_parser("turbine", help="Axial turbine meanline design")
+    turb_parser.add_argument("--expansion-ratio", type=float, required=True, help="Overall expansion ratio P_in/P_out")
+    turb_parser.add_argument("--mass-flow", type=float, default=20.0, help="Mass flow (kg/s)")
+    turb_parser.add_argument("--rpm", type=float, default=17189.0, help="RPM")
+    turb_parser.add_argument("--r-hub", type=float, default=0.25, help="Hub radius (m)")
+    turb_parser.add_argument("--r-tip", type=float, default=0.35, help="Tip radius (m)")
+    turb_parser.add_argument("--n-stages", type=int, default=None, help="Number of stages (auto if omitted)")
+    turb_parser.add_argument("--reaction", type=float, default=0.5, help="Degree of reaction (default 0.5)")
+    turb_parser.add_argument("--eta", type=float, default=0.90, help="Polytropic efficiency (default 0.90)")
+    turb_parser.add_argument("--inlet-temp", type=float, default=1500.0, help="Inlet total temperature (K)")
+    turb_parser.add_argument("--inlet-pressure", type=float, default=101325.0, help="Inlet total pressure (Pa)")
+    turb_parser.add_argument("--radial-stations", type=int, default=3, help="Radial stations for free-vortex")
+    turb_parser.add_argument("--report", type=str, default=None, help="Generate HTML report to this file")
+
     # --- fea ---
     fea_parser = subparsers.add_parser("fea", help="Set up FEA structural analysis")
     fea_parser.add_argument("--material", default="inconel_718", help="Material name")
@@ -355,6 +370,8 @@ def main():
         _cmd_pipeline(args)
     elif args.command == "centrifugal":
         _cmd_centrifugal(args)
+    elif args.command == "turbine":
+        _cmd_turbine(args)
 
 
 # ────────────────────────────────────────────────────────────────
@@ -850,6 +867,51 @@ def _cmd_centrifugal(args):
             output_path=report_path,
         )
         generate_report(config=cfg, centrifugal_result=result)
+        print(f"\nReport generated: {report_path}")
+
+
+def _cmd_turbine(args):
+    """Run axial turbine meanline design."""
+    from astraturbo.design.turbine import meanline_turbine, meanline_to_turbine_blade_parameters
+
+    result = meanline_turbine(
+        overall_expansion_ratio=args.expansion_ratio,
+        mass_flow=args.mass_flow,
+        rpm=args.rpm,
+        r_hub=args.r_hub,
+        r_tip=args.r_tip,
+        n_stages=args.n_stages,
+        eta_poly=args.eta,
+        reaction=args.reaction,
+        T_inlet=args.inlet_temp,
+        P_inlet=args.inlet_pressure,
+        radial_stations=args.radial_stations,
+    )
+
+    print(result.summary())
+    print()
+
+    params = meanline_to_turbine_blade_parameters(result)
+    print("Turbine Blade Parameters:")
+    for p in params:
+        print(f"  Stage {p['stage']}:")
+        print(f"    NGV:   stagger={p['ngv_stagger_deg']:.1f} deg, "
+              f"camber={p['ngv_camber_deg']:.1f} deg, "
+              f"solidity={p['ngv_solidity']:.2f}")
+        print(f"    Rotor: stagger={p['rotor_stagger_deg']:.1f} deg, "
+              f"camber={p['rotor_camber_deg']:.1f} deg, "
+              f"solidity={p['rotor_solidity']:.2f}")
+        print(f"    Zweifel = {p['zweifel']:.3f}")
+
+    # Report
+    report_path = getattr(args, 'report', None)
+    if report_path:
+        from astraturbo.reports import generate_report, ReportConfig
+        cfg = ReportConfig(
+            title=f"Axial Turbine — ER {args.expansion_ratio}",
+            output_path=report_path,
+        )
+        generate_report(config=cfg, turbine_result=result)
         print(f"\nReport generated: {report_path}")
 
 

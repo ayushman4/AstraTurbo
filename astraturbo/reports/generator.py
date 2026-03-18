@@ -279,6 +279,64 @@ def _material_section(material, temperature: float | None = None) -> str:
     return "\n".join(lines)
 
 
+def _turbine_section(result) -> str:
+    """Generate turbine design summary section."""
+    lines = ["<h2>Turbine Meanline Design</h2>"]
+
+    lines.append("<div class='summary-box'>")
+    lines.append(f"<strong>Stages:</strong> {result.n_stages} &nbsp;&nbsp;")
+    lines.append(f"<strong>Overall ER:</strong> {result.overall_expansion_ratio:.4f} &nbsp;&nbsp;")
+    lines.append(f"<strong>Overall TR:</strong> {result.overall_temperature_ratio:.4f} &nbsp;&nbsp;")
+    lines.append(f"<strong>Efficiency:</strong> {result.overall_efficiency:.4f} &nbsp;&nbsp;")
+    lines.append(f"<strong>Total Work:</strong> {result.total_work:.0f} J/kg")
+    lines.append("</div>")
+
+    # Per-stage table
+    lines.append("<h3>Stage-by-Stage Performance</h3>")
+    lines.append("<table>")
+    lines.append(
+        "<tr><th>Stage</th><th>ER</th><th>&eta;</th>"
+        "<th>&phi;</th><th>&psi;</th><th>R</th>"
+        "<th>Zweifel</th><th>Nozzle M</th></tr>"
+    )
+    for s in result.stages:
+        z_class = "good" if 0.6 <= s.zweifel_coefficient <= 1.2 else "warning"
+        lines.append(
+            f"<tr><td>{s.stage_number}</td>"
+            f"<td>{s.expansion_ratio:.4f}</td>"
+            f"<td>{s.isentropic_efficiency:.4f}</td>"
+            f"<td>{s.flow_coefficient:.3f}</td>"
+            f"<td>{s.loading_coefficient:.3f}</td>"
+            f"<td>{s.degree_of_reaction:.3f}</td>"
+            f"<td class='{z_class}'>{s.zweifel_coefficient:.3f}</td>"
+            f"<td>{s.nozzle_exit_mach:.3f}</td></tr>"
+        )
+    lines.append("</table>")
+
+    # Blade angles table
+    lines.append("<h3>Blade Angles</h3>")
+    lines.append("<table>")
+    lines.append(
+        "<tr><th>Stage</th>"
+        "<th>NGV &alpha;<sub>in</sub> (&deg;)</th>"
+        "<th>NGV &alpha;<sub>out</sub> (&deg;)</th>"
+        "<th>Rotor &beta;<sub>in</sub> (&deg;)</th>"
+        "<th>Rotor &beta;<sub>out</sub> (&deg;)</th></tr>"
+    )
+    for s in result.stages:
+        a = s.blade_angles_deg()
+        lines.append(
+            f"<tr><td>{s.stage_number}</td>"
+            f"<td>{a['nozzle_inlet_alpha']:.1f}</td>"
+            f"<td>{a['nozzle_outlet_alpha']:.1f}</td>"
+            f"<td>{a['rotor_inlet_beta']:.1f}</td>"
+            f"<td>{a['rotor_outlet_beta']:.1f}</td></tr>"
+        )
+    lines.append("</table>")
+
+    return "\n".join(lines)
+
+
 def _centrifugal_section(result) -> str:
     """Generate centrifugal compressor section."""
     lines = ["<h2>Centrifugal Compressor Design</h2>"]
@@ -326,6 +384,7 @@ def generate_report(
     off_design_result=None,
     compressor_map=None,
     centrifugal_result=None,
+    turbine_result=None,
     material=None,
     material_temperature: float | None = None,
     blade_params: list[dict] | None = None,
@@ -361,6 +420,9 @@ def generate_report(
 
     if centrifugal_result is not None:
         parts.append(_centrifugal_section(centrifugal_result))
+
+    if turbine_result is not None:
+        parts.append(_turbine_section(turbine_result))
 
     if material is not None and config.include_materials:
         parts.append(_material_section(material, material_temperature))
