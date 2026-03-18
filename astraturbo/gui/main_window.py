@@ -142,6 +142,7 @@ class MainWindow(QMainWindow):
         self._add_action(compute_menu, "&Meanline Design...", self._run_meanline)
         self._add_action(compute_menu, "&Centrifugal Compressor...", self._run_centrifugal)
         self._add_action(compute_menu, "&Turbine Meanline...", self._run_turbine_meanline)
+        self._add_action(compute_menu, "&Engine Cycle...", self._run_engine_cycle)
         compute_menu.addSeparator()
         self._add_action(compute_menu, "Compute &Blade Geometry", self._compute_blade)
         self._add_action(compute_menu, "Generate Blade &Array (Full Annulus)", self._generate_blade_array)
@@ -1078,6 +1079,95 @@ class MainWindow(QMainWindow):
                     self.statusBar().showMessage(f"Report saved: {path}")
         except Exception as e:
             QMessageBox.warning(self, "Turbine Error", f"{e}\n\n{traceback.format_exc()}")
+
+    def _run_engine_cycle(self) -> None:
+        """Run full engine cycle analysis from a dialog."""
+        from PySide6.QtWidgets import QInputDialog, QFileDialog, QDialog, QVBoxLayout, QComboBox, QLabel, QDialogButtonBox
+
+        # Engine type selection
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Engine Cycle")
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(QLabel("Engine Type:"))
+        etype_combo = QComboBox()
+        etype_combo.addItems(["turbojet", "turboshaft"])
+        layout.addWidget(etype_combo)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        engine_type = etype_combo.currentText()
+
+        opr, ok = QInputDialog.getDouble(self, "Engine Cycle", "Overall Pressure Ratio:", 8.0, 1.5, 60.0, 1)
+        if not ok:
+            return
+        tit, ok = QInputDialog.getDouble(self, "Engine Cycle", "Turbine Inlet Temp (K):", 1400.0, 800.0, 2200.0, 0)
+        if not ok:
+            return
+        mf, ok = QInputDialog.getDouble(self, "Engine Cycle", "Mass Flow (kg/s):", 20.0, 0.1, 500.0, 1)
+        if not ok:
+            return
+        rpm, ok = QInputDialog.getDouble(self, "Engine Cycle", "RPM:", 15000, 500, 200000, 0)
+        if not ok:
+            return
+        r_hub, ok = QInputDialog.getDouble(self, "Engine Cycle", "Hub Radius (m):", 0.15, 0.01, 5.0, 3)
+        if not ok:
+            return
+        r_tip, ok = QInputDialog.getDouble(self, "Engine Cycle", "Tip Radius (m):", 0.30, 0.02, 5.0, 3)
+        if not ok:
+            return
+        alt, ok = QInputDialog.getDouble(self, "Engine Cycle", "Altitude (m):", 0.0, 0.0, 47000.0, 0)
+        if not ok:
+            return
+        mach, ok = QInputDialog.getDouble(self, "Engine Cycle", "Flight Mach:", 0.0, 0.0, 3.5, 2)
+        if not ok:
+            return
+
+        try:
+            from ..design.engine_cycle import engine_cycle
+            result = engine_cycle(
+                engine_type=engine_type,
+                altitude=alt,
+                mach_flight=mach,
+                overall_pressure_ratio=opr,
+                turbine_inlet_temp=tit,
+                mass_flow=mf,
+                rpm=rpm,
+                r_hub=r_hub,
+                r_tip=r_tip,
+            )
+
+            QMessageBox.information(self, "Engine Cycle", result.summary())
+            if engine_type == "turbojet":
+                self.statusBar().showMessage(
+                    f"Engine Cycle: Thrust={result.net_thrust / 1000:.2f} kN, "
+                    f"SFC={result.specific_fuel_consumption * 3600:.4f} kg/(N·h)"
+                )
+            else:
+                self.statusBar().showMessage(
+                    f"Engine Cycle: Power={result.shaft_power / 1000:.1f} kW"
+                )
+
+            save_report = QMessageBox.question(
+                self, "Save Report?", "Generate HTML report?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if save_report == QMessageBox.Yes:
+                path, _ = QFileDialog.getSaveFileName(
+                    self, "Save Report", "engine_cycle_report.html", "HTML (*.html)"
+                )
+                if path:
+                    from ..reports import generate_report, ReportConfig
+                    cfg = ReportConfig(
+                        title=f"Engine Cycle — {engine_type.upper()} OPR={opr} TIT={tit}K",
+                        output_path=path,
+                    )
+                    generate_report(config=cfg, engine_cycle_result=result)
+                    self.statusBar().showMessage(f"Report saved: {path}")
+        except Exception as e:
+            QMessageBox.warning(self, "Engine Cycle Error", f"{e}\n\n{traceback.format_exc()}")
 
     # ----------------------------------------------------------------
     # Undo / Redo

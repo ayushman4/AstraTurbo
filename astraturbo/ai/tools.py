@@ -1000,6 +1000,67 @@ _register(
 
 
 # ──────────────────────────────────────────────────────
+# 23. Engine cycle analysis
+# ──────────────────────────────────────────────────────
+
+_register(
+    "engine_cycle",
+    "Run a complete gas turbine engine cycle analysis. "
+    "Connects compressor, combustor, turbine, and nozzle to compute "
+    "thrust (turbojet) or shaft power (turboshaft), SFC, and efficiencies. "
+    "Supports both axial and centrifugal compressor types.",
+    {
+        "type": "object",
+        "properties": {
+            "engine_type": {
+                "type": "string",
+                "enum": ["turbojet", "turboshaft"],
+                "description": "Engine type: turbojet (thrust) or turboshaft (shaft power)",
+            },
+            "overall_pressure_ratio": {
+                "type": "number",
+                "description": "Compressor overall pressure ratio (e.g. 8, 20)",
+            },
+            "turbine_inlet_temp": {
+                "type": "number",
+                "description": "Turbine inlet temperature in K (e.g. 1400, 1700)",
+            },
+            "mass_flow": {
+                "type": "number",
+                "description": "Air mass flow rate in kg/s",
+            },
+            "rpm": {
+                "type": "number",
+                "description": "Shaft speed in RPM",
+            },
+            "r_hub": {
+                "type": "number",
+                "description": "Hub radius in meters",
+            },
+            "r_tip": {
+                "type": "number",
+                "description": "Tip radius in meters",
+            },
+            "altitude": {
+                "type": "number",
+                "description": "Flight altitude in meters (default 0)",
+            },
+            "mach_flight": {
+                "type": "number",
+                "description": "Flight Mach number (default 0)",
+            },
+            "compressor_type": {
+                "type": "string",
+                "enum": ["axial", "centrifugal"],
+                "description": "Compressor type (default axial)",
+            },
+        },
+        "required": ["overall_pressure_ratio", "turbine_inlet_temp", "mass_flow", "rpm", "r_hub", "r_tip"],
+    },
+)
+
+
+# ──────────────────────────────────────────────────────
 # Tool execution dispatcher
 # ──────────────────────────────────────────────────────
 
@@ -1050,6 +1111,8 @@ def execute_tool(name: str, inputs: dict) -> str:
             return _exec_generate_report(inputs)
         elif name == "meanline_turbine":
             return _exec_turbine_meanline(inputs)
+        elif name == "engine_cycle":
+            return _exec_engine_cycle(inputs)
         else:
             return f"Unknown tool: {name}"
     except Exception as e:
@@ -1907,3 +1970,43 @@ def _exec_generate_report(inputs: dict) -> str:
         blade_params=blade_params,
     )
     return f"Report generated: {path}"
+
+
+def _exec_engine_cycle(inputs: dict) -> str:
+    from astraturbo.design.engine_cycle import engine_cycle
+
+    opr = float(inputs["overall_pressure_ratio"])
+    if not (1.5 <= opr <= 60.0):
+        return f"Error: overall_pressure_ratio {opr} out of range [1.5, 60.0]"
+
+    tit = float(inputs["turbine_inlet_temp"])
+    if not (800.0 <= tit <= 2200.0):
+        return f"Error: turbine_inlet_temp {tit} out of range [800, 2200]"
+
+    mass_flow = float(inputs["mass_flow"])
+    if not (0.1 <= mass_flow <= 1000.0):
+        return f"Error: mass_flow {mass_flow} out of range [0.1, 1000]"
+
+    rpm = float(inputs["rpm"])
+    if not (100 <= rpm <= 200000):
+        return f"Error: rpm {rpm} out of range [100, 200000]"
+
+    kwargs = {
+        "overall_pressure_ratio": opr,
+        "turbine_inlet_temp": tit,
+        "mass_flow": mass_flow,
+        "rpm": rpm,
+        "r_hub": float(inputs["r_hub"]),
+        "r_tip": float(inputs["r_tip"]),
+    }
+    if "engine_type" in inputs:
+        kwargs["engine_type"] = str(inputs["engine_type"])
+    if "altitude" in inputs:
+        kwargs["altitude"] = float(inputs["altitude"])
+    if "mach_flight" in inputs:
+        kwargs["mach_flight"] = float(inputs["mach_flight"])
+    if "compressor_type" in inputs:
+        kwargs["compressor_type"] = str(inputs["compressor_type"])
+
+    result = engine_cycle(**kwargs)
+    return result.summary()

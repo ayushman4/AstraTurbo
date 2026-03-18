@@ -378,6 +378,63 @@ def _centrifugal_section(result) -> str:
     return "\n".join(lines)
 
 
+def _engine_cycle_section(result) -> str:
+    """Generate engine cycle analysis section."""
+    lines = ["<h2>Engine Cycle Analysis</h2>"]
+
+    # Summary box
+    lines.append("<div class='summary-box'>")
+    lines.append(f"<strong>Type:</strong> {result.engine_type.upper()} &nbsp;&nbsp;")
+    if result.engine_type == "turbojet":
+        lines.append(f"<strong>Net Thrust:</strong> {result.net_thrust / 1000:.2f} kN &nbsp;&nbsp;")
+        lines.append(f"<strong>SFC:</strong> {result.specific_fuel_consumption * 3600:.4f} kg/(N&middot;h) &nbsp;&nbsp;")
+    else:
+        lines.append(f"<strong>Shaft Power:</strong> {result.shaft_power / 1000:.1f} kW &nbsp;&nbsp;")
+    lines.append(f"<strong>&eta;<sub>th</sub>:</strong> {result.thermal_efficiency:.4f} &nbsp;&nbsp;")
+    lines.append(f"<strong>&eta;<sub>overall</sub>:</strong> {result.overall_efficiency:.4f}")
+    lines.append("</div>")
+
+    # Station table
+    lines.append("<h3>Station Conditions</h3>")
+    lines.append("<table>")
+    lines.append("<tr><th>Station</th><th>P<sub>total</sub> (kPa)</th><th>T<sub>total</sub> (K)</th></tr>")
+    for name, st in result.stations.items():
+        lines.append(
+            f"<tr><td style='text-align:left'>{name}</td>"
+            f"<td>{st.P_total / 1000:.2f}</td>"
+            f"<td>{st.T_total:.1f}</td></tr>"
+        )
+    lines.append("</table>")
+
+    # Component performance
+    lines.append("<h3>Component Performance</h3>")
+    lines.append("<table>")
+    lines.append("<tr><th>Parameter</th><th>Value</th></tr>")
+    for label, val in [
+        ("Mass Flow (air)", f"{result.mass_flow:.2f} kg/s"),
+        ("Fuel Flow", f"{result.fuel_flow:.4f} kg/s"),
+        ("Fuel/Air Ratio", f"{result.combustor.fuel_air_ratio:.4f}"),
+        ("Compressor Work", f"{result.compressor_work:.0f} J/kg"),
+        ("Turbine Work", f"{result.turbine_work:.0f} J/kg"),
+        ("Mechanical Efficiency", f"{result.mechanical_efficiency:.4f}"),
+    ]:
+        lines.append(f"<tr><td style='text-align:left'>{label}</td><td>{val}</td></tr>")
+    lines.append("</table>")
+
+    # Power balance box
+    balance_err = abs(result.turbine_work * result.mechanical_efficiency - result.compressor_work)
+    balance_pct = balance_err / max(result.compressor_work, 1) * 100
+    bal_class = "good" if balance_pct < 5 else "warning"
+    lines.append(f"<div class='summary-box {bal_class}'>")
+    lines.append(f"<strong>Power Balance:</strong> "
+                 f"Turbine delivers {result.turbine_work * result.mechanical_efficiency:.0f} J/kg, "
+                 f"Compressor requires {result.compressor_work:.0f} J/kg "
+                 f"(mismatch: {balance_pct:.1f}%)")
+    lines.append("</div>")
+
+    return "\n".join(lines)
+
+
 def generate_report(
     config: ReportConfig | None = None,
     meanline_result=None,
@@ -388,6 +445,7 @@ def generate_report(
     material=None,
     material_temperature: float | None = None,
     blade_params: list[dict] | None = None,
+    engine_cycle_result=None,
 ) -> str:
     """Generate an HTML design report.
 
@@ -423,6 +481,9 @@ def generate_report(
 
     if turbine_result is not None:
         parts.append(_turbine_section(turbine_result))
+
+    if engine_cycle_result is not None:
+        parts.append(_engine_cycle_section(engine_cycle_result))
 
     if material is not None and config.include_materials:
         parts.append(_material_section(material, material_temperature))

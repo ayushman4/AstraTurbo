@@ -42,7 +42,7 @@ python -m astraturbo --version
 # astraturbo 0.1.0
 
 python -m pytest tests/ -q
-# 453+ passed
+# 474+ passed
 ```
 
 ---
@@ -225,6 +225,22 @@ python -m astraturbo turbine --expansion-ratio 3.0 --mass-flow 20 --rpm 12000 \
 # With HTML report
 python -m astraturbo turbine --expansion-ratio 2.5 --mass-flow 20 --rpm 17189 \
   --r-hub 0.25 --r-tip 0.35 --inlet-temp 1500 --report turbine_report.html
+```
+
+### Engine cycle analysis
+
+```bash
+# Simple turbojet at sea level
+python -m astraturbo engine-cycle --opr 8 --tit 1400 --mass-flow 20 --rpm 15000 \
+  --r-hub 0.15 --r-tip 0.30
+
+# Kaveri-class turbojet at altitude
+python -m astraturbo engine-cycle --engine-type turbojet --opr 20 --tit 1700 \
+  --mass-flow 20 --altitude 10000 --mach 0.8
+
+# Turboshaft for helicopter
+python -m astraturbo engine-cycle --engine-type turboshaft --opr 8 --tit 1400 \
+  --mass-flow 10 --rpm 30000 --r-hub 0.05 --r-tip 0.10 --compressor-type centrifugal
 ```
 
 ### Design reports
@@ -428,6 +444,35 @@ generate_report(
 )
 ```
 
+### Engine cycle (turbojet / turboshaft)
+
+```python
+from astraturbo.design import engine_cycle
+
+# Turbojet at sea level
+result = engine_cycle(
+    engine_type="turbojet",
+    overall_pressure_ratio=20.0,
+    turbine_inlet_temp=1700.0,
+    mass_flow=20.0,
+    rpm=15000, r_hub=0.15, r_tip=0.30,
+    altitude=0.0, mach_flight=0.0,
+)
+print(result.summary())
+print(f"Thrust: {result.net_thrust/1000:.1f} kN, SFC: {result.specific_fuel_consumption*3600:.3f} kg/(N·h)")
+
+# Turboshaft
+shaft = engine_cycle(
+    engine_type="turboshaft",
+    overall_pressure_ratio=8.0,
+    turbine_inlet_temp=1400.0,
+    mass_flow=10.0,
+    rpm=30000, r_hub=0.05, r_tip=0.10,
+    compressor_type="centrifugal",
+)
+print(f"Shaft power: {shaft.shaft_power/1000:.1f} kW")
+```
+
 ### Generate a profile
 
 ```python
@@ -597,8 +642,9 @@ print(response2)
 assistant.reset()
 ```
 
-Claude calls 22 AstraTurbo tools directly —
-meanline design (axial compressor + centrifugal + turbine), off-design analysis,
+Claude calls 23 AstraTurbo tools directly —
+meanline design (axial compressor + centrifugal + turbine), engine cycle analysis
+(turbojet/turboshaft), off-design analysis,
 compressor maps, profile generation, 3D blade building, mesh generation and export,
 CFD setup, solver execution, FEA setup, y+ calculator, full design pipeline, design
 database, HTML report generation, file inspection, material database.
@@ -615,8 +661,8 @@ export ANTHROPIC_API_KEY=sk-ant-api03-...
 
 ```
 astraturbo/
-├── ai/              Claude-powered AI assistant (22 tools, NL interface)
-├── design/          Velocity triangles, meanline (axial compressor + centrifugal + turbine), off-design, compressor maps
+├── ai/              Claude-powered AI assistant (23 tools, NL interface)
+├── design/          Velocity triangles, meanline (axial compressor + centrifugal + turbine), engine cycle, off-design, compressor maps
 ├── foundation/      Property system, signals, undo/redo, serialization
 ├── baseclass/       ATObject, Node tree, Drawable mixin
 ├── camberline/      8 camber line types
@@ -822,7 +868,7 @@ All cross-platform (Windows, Linux, macOS).
 ```bash
 pip install -e ".[dev]"
 pytest tests/ -v
-# 453+ tests pass (unit, integration, validation, GUI, CLI)
+# 474+ tests pass (unit, integration, validation, GUI, CLI)
 ```
 
 ### Test coverage

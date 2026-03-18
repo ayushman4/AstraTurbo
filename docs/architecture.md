@@ -48,15 +48,17 @@ ai (top layer — calls all modules via tool use)
 ## Modules
 
 ### ai/
-Claude-powered AI assistant with 22 tools. Uses the `anthropic` SDK with tool use —
+Claude-powered AI assistant with 23 tools. Uses the `anthropic` SDK with tool use —
 Claude calls AstraTurbo functions directly (meanline compressor/turbine, centrifugal,
-profile, mesh, CFD, FEA, y+, materials, formats, file inspect, reports).
+engine cycle, profile, mesh, CFD, FEA, y+, materials, formats, file inspect, reports).
 Requires `ANTHROPIC_API_KEY`.
 Accessible via: GUI (AI Assistant tab), CLI (`astraturbo ai`), Python (`create_assistant()`).
 
 ### design/
 Velocity triangle calculations, meanline stage-by-stage analysis (axial compressor,
-centrifugal compressor, and axial turbine), off-design solver, and compressor map generation.
+centrifugal compressor, and axial turbine), engine cycle solver (turbojet/turboshaft:
+inlet → compressor → combustor → turbine → nozzle), off-design solver, and compressor
+map generation.
 Input: pressure ratio/expansion ratio, mass flow, RPM, radii, inlet temperature.
 Output: blade angles, loading coefficients, De Haller ratios, Zweifel loading (turbine),
 Soderberg losses (turbine), speed lines, surge margin, impeller/diffuser geometry (centrifugal).

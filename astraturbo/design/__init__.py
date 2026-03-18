@@ -50,6 +50,17 @@ from .turbine import (
     meanline_turbine,
     meanline_to_turbine_blade_parameters,
 )
+from .engine_cycle import (
+    InletResult,
+    CombustorResult,
+    NozzleResult,
+    EngineCycleResult,
+    standard_atmosphere,
+    inlet_model,
+    combustor_model,
+    nozzle_model,
+    engine_cycle,
+)
 
 __all__ = [
     "VelocityTriangle",
@@ -75,4 +86,13 @@ __all__ = [
     "TurbineResult",
     "meanline_turbine",
     "meanline_to_turbine_blade_parameters",
+    "InletResult",
+    "CombustorResult",
+    "NozzleResult",
+    "EngineCycleResult",
+    "standard_atmosphere",
+    "inlet_model",
+    "combustor_model",
+    "nozzle_model",
+    "engine_cycle",
 ]

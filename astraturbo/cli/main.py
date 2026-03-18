@@ -319,6 +319,20 @@ def main():
     sw_parser.add_argument("--end", type=float, required=True, help="End value")
     sw_parser.add_argument("--steps", type=int, default=5, help="Number of sweep steps")
 
+    # --- engine-cycle ---
+    ec_parser = subparsers.add_parser("engine-cycle", help="Full engine cycle analysis (turbojet/turboshaft)")
+    ec_parser.add_argument("--engine-type", choices=["turbojet", "turboshaft"], default="turbojet", help="Engine type")
+    ec_parser.add_argument("--altitude", type=float, default=0.0, help="Altitude (m)")
+    ec_parser.add_argument("--mach", type=float, default=0.0, help="Flight Mach number")
+    ec_parser.add_argument("--opr", type=float, required=True, help="Overall pressure ratio")
+    ec_parser.add_argument("--tit", type=float, required=True, help="Turbine inlet temperature (K)")
+    ec_parser.add_argument("--mass-flow", type=float, default=20.0, help="Air mass flow (kg/s)")
+    ec_parser.add_argument("--rpm", type=float, default=15000.0, help="Shaft speed (RPM)")
+    ec_parser.add_argument("--r-hub", type=float, default=0.15, help="Hub radius (m)")
+    ec_parser.add_argument("--r-tip", type=float, default=0.30, help="Tip radius (m)")
+    ec_parser.add_argument("--compressor-type", choices=["axial", "centrifugal"], default="axial", help="Compressor type")
+    ec_parser.add_argument("--report", type=str, default=None, help="Generate HTML report to this file")
+
     # Parse
     args = parser.parse_args()
 
@@ -372,6 +386,8 @@ def main():
         _cmd_centrifugal(args)
     elif args.command == "turbine":
         _cmd_turbine(args)
+    elif args.command == "engine-cycle":
+        _cmd_engine_cycle(args)
 
 
 # ────────────────────────────────────────────────────────────────
@@ -912,6 +928,36 @@ def _cmd_turbine(args):
             output_path=report_path,
         )
         generate_report(config=cfg, turbine_result=result)
+        print(f"\nReport generated: {report_path}")
+
+
+def _cmd_engine_cycle(args):
+    """Run full engine cycle analysis."""
+    from astraturbo.design.engine_cycle import engine_cycle
+
+    result = engine_cycle(
+        engine_type=args.engine_type,
+        altitude=args.altitude,
+        mach_flight=args.mach,
+        overall_pressure_ratio=args.opr,
+        turbine_inlet_temp=args.tit,
+        mass_flow=args.mass_flow,
+        rpm=args.rpm,
+        r_hub=args.r_hub,
+        r_tip=args.r_tip,
+        compressor_type=args.compressor_type,
+    )
+
+    print(result.summary())
+
+    report_path = getattr(args, 'report', None)
+    if report_path:
+        from astraturbo.reports import generate_report, ReportConfig
+        cfg = ReportConfig(
+            title=f"Engine Cycle — {args.engine_type.upper()} OPR={args.opr} TIT={args.tit}K",
+            output_path=report_path,
+        )
+        generate_report(config=cfg, engine_cycle_result=result)
         print(f"\nReport generated: {report_path}")
 
 

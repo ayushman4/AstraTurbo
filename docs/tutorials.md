@@ -577,6 +577,70 @@ hub/tip radii, and inlet temperature. Optionally save an HTML report.
 
 ---
 
+## Tutorial 6d: Engine Cycle Analysis
+
+The engine cycle solver connects compressor → combustor → turbine → nozzle
+to model a complete gas turbine engine, computing thrust (turbojet) or shaft
+power (turboshaft), SFC, and efficiencies.
+
+### CLI
+
+```bash
+# Turbojet at sea level
+python -m astraturbo engine-cycle --opr 8 --tit 1400 --mass-flow 20 \
+  --rpm 15000 --r-hub 0.15 --r-tip 0.30
+
+# Turbojet at altitude with flight Mach
+python -m astraturbo engine-cycle --engine-type turbojet --opr 20 --tit 1700 \
+  --mass-flow 20 --altitude 10000 --mach 0.8 --report kaveri_report.html
+
+# Turboshaft with centrifugal compressor
+python -m astraturbo engine-cycle --engine-type turboshaft --opr 8 --tit 1400 \
+  --mass-flow 10 --rpm 30000 --r-hub 0.05 --r-tip 0.10 --compressor-type centrifugal
+```
+
+### Python API
+
+```python
+from astraturbo.design import engine_cycle
+
+# Turbojet cycle
+result = engine_cycle(
+    engine_type="turbojet",
+    overall_pressure_ratio=20.0,
+    turbine_inlet_temp=1700.0,
+    mass_flow=20.0,
+    rpm=15000, r_hub=0.15, r_tip=0.30,
+)
+print(result.summary())
+print(f"Thrust: {result.net_thrust/1000:.1f} kN")
+print(f"SFC: {result.specific_fuel_consumption*3600:.4f} kg/(N·h)")
+print(f"Thermal efficiency: {result.thermal_efficiency:.4f}")
+
+# Station conditions
+for name, st in result.stations.items():
+    print(f"  {name}: P={st.P_total/1000:.1f} kPa, T={st.T_total:.1f} K")
+
+# Access component results
+print(f"Compressor stages: {result.compressor.n_stages}")
+print(f"Turbine stages: {result.turbine.n_stages}")
+print(f"Fuel/air ratio: {result.combustor.fuel_air_ratio:.4f}")
+
+# Generate report
+from astraturbo.reports import generate_report, ReportConfig
+generate_report(
+    config=ReportConfig(title="Kaveri Engine", output_path="kaveri.html"),
+    engine_cycle_result=result,
+)
+```
+
+### From the GUI
+
+**Compute > Engine Cycle...** — select engine type, enter OPR, TIT, mass flow,
+RPM, radii, altitude, and Mach number. Optionally save an HTML report.
+
+---
+
 ## Tutorial 7: Set Up a CFD Case
 
 ### OpenFOAM
