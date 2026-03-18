@@ -633,6 +633,8 @@ python -m astraturbo meanline --pr 2.1 --mass-flow 20 --rpm 17189 \
 | `astraturbo profile [options]` | Generate a 2D blade profile |
 | `astraturbo mesh [options]` | Generate a mesh (`--3d` for 3D, `--with-bcs` for CGNS BCs) |
 | `astraturbo meanline [options]` | Meanline design (`--off-design`, `--map`, `--radial-stations N`) |
+| `astraturbo blade [options]` | Build 3D blade from hub-to-tip profiles (`-o mesh.cgns`) |
+| `astraturbo pipeline [options]` | Full design pipeline (`--compressible`, `--cfd-output`) |
 | `astraturbo cfd [options]` | CFD case setup (`--compressible` for rhoSimpleFoam) |
 | `astraturbo fea [options]` | FEA structural analysis |
 | `astraturbo yplus [options]` | y+ / cell height calculator |

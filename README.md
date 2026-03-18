@@ -201,6 +201,25 @@ python -m astraturbo yplus --velocity 100 --chord 0.1
 python -m astraturbo yplus --velocity 100 --chord 0.1 --cell-height 0.00001
 ```
 
+### 3D blade building
+
+```bash
+# Build 3D blade with hub-to-tip variation
+python -m astraturbo blade --r-hub 0.15 --r-tip 0.25 \
+  --cl0-hub 0.8 --cl0-mid 1.0 --cl0-tip 1.2 \
+  --stagger-hub 30 --stagger-mid 35 --stagger-tip 40 \
+  -o blade_mesh.cgns
+```
+
+### Full design pipeline (one command)
+
+```bash
+# Run entire pipeline: meanline → profile → blade → mesh → export → CFD
+python -m astraturbo pipeline --pr 1.5 --mass-flow 20 --rpm 15000
+python -m astraturbo pipeline --pr 2.1 --mass-flow 20 --rpm 17189 \
+  --compressible --cfd-output ./cfd_case
+```
+
 ### FEA setup
 
 ```bash
@@ -218,6 +237,8 @@ python -m astraturbo run cfd_case --solver openfoam
 python -m astraturbo smooth --input mesh.cgns --iterations 20 -o smooth.cgns
 python -m astraturbo throughflow --pr 1.5 --mass-flow 20 --rpm 15000
 python -m astraturbo sweep --parameter cl0 --start 0.3 --end 1.2 --steps 10
+python -m astraturbo blade --r-hub 0.15 --r-tip 0.25 -o blade.cgns
+python -m astraturbo pipeline --pr 1.5 --mass-flow 20 --rpm 15000
 python -m astraturbo database list
 python -m astraturbo database save --name "rotor_v1" --params '{"chord": 0.05}'
 ```
@@ -481,9 +502,11 @@ print(response2)
 assistant.reset()
 ```
 
-Claude calls 9 AstraTurbo tools directly —
-meanline design, profile generation, mesh generation, CFD setup, FEA setup,
-y+ calculator, file inspection, material database, format listing.
+Claude calls 19 AstraTurbo tools directly —
+meanline design, off-design analysis, compressor maps, profile generation,
+3D blade building, mesh generation and export, CFD setup, solver execution,
+FEA setup, y+ calculator, full design pipeline, design database,
+file inspection, material database, format listing.
 
 Setup:
 ```bash
@@ -497,7 +520,7 @@ export ANTHROPIC_API_KEY=sk-ant-api03-...
 
 ```
 astraturbo/
-├── ai/              Claude-powered AI assistant (9 tools, NL interface)
+├── ai/              Claude-powered AI assistant (19 tools, NL interface)
 ├── design/          Velocity triangles, meanline analysis, off-design, compressor maps
 ├── foundation/      Property system, signals, undo/redo, serialization
 ├── baseclass/       ATObject, Node tree, Drawable mixin
@@ -524,7 +547,7 @@ astraturbo/
 ├── export/          30 formats: CGNS, OpenFOAM, Tecplot, VTK, Fluent, etc.
 ├── cfd/             4 solvers: OpenFOAM, Fluent, CFX, SU2
 ├── fea/             Structural analysis: CalculiX/Abaqus
-│   ├── material       6 turbomachinery materials database
+│   ├── material       32 turbomachinery materials database
 │   ├── calculix       Input file generation
 │   ├── mesh_export    Surface-to-solid mesh, CFD pressure mapping
 │   └── workflow       Coupled CFD-FEA pipeline
@@ -533,7 +556,7 @@ astraturbo/
 ├── database/        SQLite design database (save/search/compare/export)
 ├── hpc/             HPC backends: Local, SLURM, PBS, AWS Batch + auto-provisioner
 ├── gui/             PySide6 GUI with 3D viewer + AI chat panel
-└── cli/             20+ commands (profile, mesh, ai, meanline, cfd, fea, hpc, ...)
+└── cli/             25+ commands (profile, mesh, blade, pipeline, meanline, cfd, fea, hpc, ...)
 ```
 
 ### Design pipeline
