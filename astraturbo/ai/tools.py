@@ -938,6 +938,10 @@ _register(
                 "type": "number",
                 "description": "Operating temperature (K) for material section",
             },
+            "cfd_case_dir": {
+                "type": "string",
+                "description": "Path to OpenFOAM case directory to include CFD pressure/velocity fields and residual convergence in report",
+            },
         },
         "required": ["output_path"],
     },
@@ -2299,6 +2303,9 @@ def _exec_generate_report(inputs: dict) -> str:
     blade_params = None
     compressor_map = None
     material = None
+    engine_cycle_result = None
+    profile_coords = None
+    mesh = None
     mat_temp = inputs.get("material_temperature", None)
 
     # Run meanline if parameters provided
@@ -2318,9 +2325,59 @@ def _exec_generate_report(inputs: dict) -> str:
                 meanline_result, rpm_fractions=[0.7, 0.85, 1.0, 1.05], n_points=10,
             )
 
+        # Generate a blade profile for embedding in the report
+        try:
+            from astraturbo.camberline import NACA65
+            from astraturbo.thickness import NACA65Series
+            from astraturbo.profile import Superposition
+            cl0 = blade_params[0].get("rotor_camber_deg", 30.0) / 25.0 if blade_params else 1.0
+            prof = Superposition(NACA65(cl0=max(0.2, min(cl0, 2.0))), NACA65Series())
+            profile_coords = prof.as_array()
+            # Also generate a mesh for the report
+            from astraturbo.mesh.multiblock import generate_blade_passage_mesh
+            mesh = generate_blade_passage_mesh(
+                profile=profile_coords, pitch=0.05,
+                n_blade=40, n_ogrid=10, n_inlet=15, n_outlet=15, n_passage=20,
+                ogrid_thickness=0.005,
+            )
+        except Exception:
+            pass
+
+    # Run engine cycle if OPR and TIT provided
+    if "turbine_inlet_temp" in inputs and "overall_pressure_ratio" in inputs:
+        try:
+            from astraturbo.design.engine_cycle import engine_cycle
+            ec_kwargs = {
+                "overall_pressure_ratio": float(inputs["overall_pressure_ratio"]),
+                "turbine_inlet_temp": float(inputs["turbine_inlet_temp"]),
+                "mass_flow": float(inputs.get("mass_flow", 20.0)),
+                "rpm": float(inputs.get("rpm", 15000)),
+                "r_hub": float(inputs.get("r_hub", 0.15)),
+                "r_tip": float(inputs.get("r_tip", 0.30)),
+            }
+            for key in ("engine_type", "altitude", "mach_flight", "n_spools"):
+                if key in inputs:
+                    ec_kwargs[key] = inputs[key]
+            engine_cycle_result = engine_cycle(**ec_kwargs)
+        except Exception:
+            pass
+
     if "material" in inputs:
         from astraturbo.fea import get_material
         material = get_material(inputs["material"])
+
+    # Load CFD results if case directory provided
+    cfd_solution = None
+    cfd_residuals = None
+    if "cfd_case_dir" in inputs:
+        try:
+            from astraturbo.cfd.postprocess import read_openfoam_solution, read_openfoam_residuals
+            cfd_solution = read_openfoam_solution(inputs["cfd_case_dir"])
+            log_file = Path(inputs["cfd_case_dir"]) / "solver.log"
+            if log_file.exists():
+                cfd_residuals = read_openfoam_residuals(str(log_file))
+        except Exception:
+            pass
 
     path = generate_report(
         config=cfg,
@@ -2329,6 +2386,11 @@ def _exec_generate_report(inputs: dict) -> str:
         material=material,
         material_temperature=float(mat_temp) if mat_temp else None,
         blade_params=blade_params,
+        engine_cycle_result=engine_cycle_result,
+        profile_coords=profile_coords,
+        mesh=mesh,
+        cfd_solution=cfd_solution,
+        cfd_residuals=cfd_residuals,
     )
     return f"Report generated: {path}"
 
@@ -2384,7 +2446,21 @@ def _exec_engine_cycle(inputs: dict) -> str:
         kwargs["nozzle_design_mach"] = float(inputs["nozzle_design_mach"])
 
     result = engine_cycle(**kwargs)
-    return result.summary()
+    summary = result.summary()
+
+    # Generate report if output_path is provided
+    if "report_path" in inputs:
+        from astraturbo.reports import generate_report, ReportConfig
+        rpath = str(inputs["report_path"])
+        _validate_path(rpath)
+        cfg = ReportConfig(
+            title=f"Engine Cycle — {kwargs.get('engine_type', 'turbojet').upper()} OPR={opr}",
+            output_path=rpath,
+        )
+        generate_report(config=cfg, engine_cycle_result=result)
+        summary += f"\n\nReport generated: {rpath}"
+
+    return summary
 
 
 def _exec_turbine_off_design(inputs: dict) -> str:

@@ -10,7 +10,7 @@ Workflow orchestration via CFDWorkflow class handles the full pipeline:
   mesh → case setup → solver execution → post-processing
 """
 
-from .openfoam import create_openfoam_case
+from .openfoam import create_openfoam_case, write_simpleFoam_case
 from .su2 import write_su2_config
 from .runner import run_openfoam, run_su2, RunConfig, RunResult
 from .postprocess import read_openfoam_residuals, compute_performance_map
@@ -18,6 +18,7 @@ from .workflow import CFDWorkflow, CFDWorkflowConfig, CFDWorkflowResult
 
 __all__ = [
     "create_openfoam_case",
+    "write_simpleFoam_case",
     "write_su2_config",
     "run_openfoam",
     "run_su2",

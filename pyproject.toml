@@ -49,6 +49,7 @@ dependencies = [
     "meshio>=5.3",
     "pyyaml>=6.0",
     "blinker>=1.6",
+    "matplotlib>=3.7",
 ]
 
 [project.optional-dependencies]

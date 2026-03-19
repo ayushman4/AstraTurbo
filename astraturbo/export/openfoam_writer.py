@@ -74,7 +74,7 @@ def _write_vertices(f: TextIO, vertices: NDArray[np.float64]) -> None:
     """Write the vertices section."""
     f.write("vertices\n(\n")
     for i, v in enumerate(vertices):
-        f.write(f"    ({v[0]:.10g} {v[1]:.10g} {v[2]:.10g})  // {i}\n")
+        f.write(f"    ({float(v[0]):.10g} {float(v[1]):.10g} {float(v[2]):.10g})  // {i}\n")
     f.write(");\n\n")
 
 
@@ -100,11 +100,34 @@ def _write_edges(f: TextIO) -> None:
 
 
 def _write_boundary(f: TextIO, patches: list[dict]) -> None:
-    """Write the boundary section."""
+    """Write the boundary section.
+
+    For cyclic patches in OpenFOAM v2012+, includes the required
+    'neighbourPatch' keyword. Cyclic pairs are auto-detected by
+    matching *_upper/*_lower or *_0/*_1 naming convention.
+    """
+    # Build cyclic pair map
+    patch_names = [p["name"] for p in patches]
+    cyclic_pairs: dict[str, str] = {}
+    for name in patch_names:
+        if name.endswith("_upper"):
+            partner = name.replace("_upper", "_lower")
+            if partner in patch_names:
+                cyclic_pairs[name] = partner
+                cyclic_pairs[partner] = name
+        elif name.endswith("_0"):
+            partner = name.replace("_0", "_1")
+            if partner in patch_names:
+                cyclic_pairs[name] = partner
+                cyclic_pairs[partner] = name
+
     f.write("boundary\n(\n")
     for patch in patches:
         f.write(f"    {patch['name']}\n    {{\n")
         f.write(f"        type {patch['type']};\n")
+        # Cyclic patches require neighbourPatch in OpenFOAM v2012+
+        if patch["type"] == "cyclic" and patch["name"] in cyclic_pairs:
+            f.write(f"        neighbourPatch {cyclic_pairs[patch['name']]};\n")
         f.write("        faces\n        (\n")
         for face in patch.get("faces", []):
             face_str = " ".join(str(v) for v in face)

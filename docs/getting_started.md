@@ -30,7 +30,7 @@ python -m astraturbo --version
 # astraturbo 0.1.0
 
 python -m pytest tests/ -q
-# 453+ passed
+# 650+ passed
 ```
 
 ---
@@ -603,6 +603,7 @@ python -m astraturbo meanline --pr 2.1 --mass-flow 20 --rpm 17189 \
 | `astraturbo.design.centrifugal` | `from astraturbo.design import centrifugal_compressor` | Centrifugal compressor design |
 | `astraturbo.design.turbine` | `from astraturbo.design import meanline_turbine` | Axial turbine meanline design |
 | `astraturbo.reports` | `from astraturbo.reports import generate_report` | HTML report generation |
+| `astraturbo.reports.plots` | `from astraturbo.reports.plots import plot_engine_stations` | Matplotlib plot generators (base64 PNG) |
 | `astraturbo.nurbs` | `from astraturbo.nurbs import interpolate_3d` | NURBS utilities |
 | `astraturbo.machine` | `from astraturbo.machine import TurboMachine` | Machine container |
 | `astraturbo.mesh` | `from astraturbo.mesh import SCMMesher, OGridGenerator` | Mesh generation |

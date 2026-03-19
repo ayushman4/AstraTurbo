@@ -221,19 +221,26 @@ class CFDWorkflow:
             total_temperature=cfg.total_temperature if cfg.compressible else 288.15,
         )
 
-        # If mesh is CGNS, write conversion script
+        # If mesh is CGNS, write conversion script with fallback
         if self._mesh_path and self._mesh_path.endswith(".cgns"):
             # Security: quote path to prevent shell injection
             import shlex
             safe_path = shlex.quote(self._mesh_path)
             script = self._case_dir / "import_mesh.sh"
             with open(script, "w") as f:
-                f.write("#!/bin/bash\n")
-                f.write(f"cgnsToFoam {safe_path}\n")
+                f.write("#!/bin/bash\nset -e\n")
+                f.write(f"if command -v cgnsToFoam &>/dev/null; then\n")
+                f.write(f"    cgnsToFoam {safe_path}\n")
+                f.write(f"elif [ -f system/blockMeshDict ]; then\n")
+                f.write(f"    blockMesh\n")
+                f.write(f"else\n")
+                f.write(f"    echo 'ERROR: cgnsToFoam not available and no blockMeshDict found.'\n")
+                f.write(f"    exit 1\n")
+                f.write(f"fi\n")
                 f.write("checkMesh\n")
             script.chmod(0o755)
 
-        # If rotating, add MRF zone
+        # If rotating, add MRF zone + topoSetDict to create the cellZone
         if cfg.is_rotating:
             mrf_path = self._case_dir / "constant" / "MRFProperties"
             with open(mrf_path, "w") as f:
@@ -245,6 +252,28 @@ class CFDWorkflow:
                 f.write(f"    axis        ({cfg.rotation_axis[0]} {cfg.rotation_axis[1]} {cfg.rotation_axis[2]});\n")
                 f.write(f"    omega       {cfg.omega};\n")
                 f.write("}\n")
+
+            # Write topoSetDict: creates "rotatingZone" cellZone from ALL cells.
+            # This is required because blockMesh doesn't create cellZones.
+            topo_path = self._case_dir / "system" / "topoSetDict"
+            with open(topo_path, "w") as f:
+                f.write("FoamFile { version 2.0; format ascii; class dictionary; object topoSetDict; }\n\n")
+                f.write("actions\n(\n")
+                f.write("    {\n")
+                f.write("        name    rotatingZone;\n")
+                f.write("        type    cellSet;\n")
+                f.write("        action  new;\n")
+                f.write("        source  boxToCell;\n")
+                f.write("        box     (-1e10 -1e10 -1e10) (1e10 1e10 1e10);\n")
+                f.write("    }\n")
+                f.write("    {\n")
+                f.write("        name    rotatingZone;\n")
+                f.write("        type    cellZoneSet;\n")
+                f.write("        action  new;\n")
+                f.write("        source  setToCellZone;\n")
+                f.write("        set     rotatingZone;\n")
+                f.write("    }\n")
+                f.write(");\n")
 
         # Write Allrun script
         # Security: validate solver name against whitelist, quote paths
@@ -259,12 +288,43 @@ class CFDWorkflow:
         allrun = self._case_dir / "Allrun"
         with open(allrun, "w") as f:
             f.write("#!/bin/bash\n")
-            f.write("cd ${0%/*} || exit 1\n")
-            if self._mesh_path and self._mesh_path.endswith(".cgns"):
-                f.write(f"cgnsToFoam {shlex.quote(self._mesh_path)}\n")
+            f.write("set -e\n")
+            f.write('cd "${0%/*}" 2>/dev/null || true\n\n')
+
+            # Mesh import strategy: try multiple methods
+            if self._mesh_path:
+                safe_path = shlex.quote(self._mesh_path)
+                if self._mesh_path.endswith(".cgns"):
+                    # Try cgnsToFoam first, fall back to blockMesh if not available
+                    f.write("# Mesh import: CGNS with fallback to blockMeshDict\n")
+                    f.write(f"if command -v cgnsToFoam &>/dev/null; then\n")
+                    f.write(f"    echo 'Importing CGNS mesh...'\n")
+                    f.write(f"    cgnsToFoam {safe_path}\n")
+                    f.write(f"elif [ -f system/blockMeshDict ]; then\n")
+                    f.write(f"    echo 'cgnsToFoam not found, using blockMeshDict...'\n")
+                    f.write(f"    blockMesh\n")
+                    f.write(f"else\n")
+                    f.write(f"    echo 'ERROR: Neither cgnsToFoam nor blockMeshDict found.'\n")
+                    f.write(f"    echo 'Install cgnsToFoam or export mesh as blockMeshDict:'\n")
+                    f.write(f"    echo '  mesh.export_openfoam(\"system/blockMeshDict\")'\n")
+                    f.write(f"    exit 1\n")
+                    f.write(f"fi\n\n")
+                elif self._mesh_path.endswith(".msh"):
+                    # Fluent mesh
+                    f.write(f"echo 'Importing Fluent mesh...'\n")
+                    f.write(f"fluentMeshToFoam {safe_path}\n\n")
+                else:
+                    f.write("blockMesh\n\n")
             else:
-                f.write("blockMesh\n")
-            f.write("checkMesh\n")
+                f.write("blockMesh\n\n")
+
+            f.write("checkMesh\n\n")
+
+            # Create cellZone for MRF if rotating
+            if cfg.is_rotating:
+                f.write("# Create rotatingZone cellZone for MRF\n")
+                f.write("topoSet\n\n")
+
             if n_procs > 1:
                 f.write("decomposePar -force\n")
                 f.write(f"mpirun -np {n_procs} {solver} -parallel\n")
@@ -272,6 +332,18 @@ class CFDWorkflow:
             else:
                 f.write(f"{solver}\n")
         allrun.chmod(0o755)
+
+        # If mesh is CGNS, also generate blockMeshDict as fallback
+        # so the case works even without cgnsToFoam
+        if self._mesh_path and self._mesh_path.endswith(".cgns"):
+            bmd_note = self._case_dir / "system" / "README_mesh.txt"
+            bmd_note.parent.mkdir(parents=True, exist_ok=True)
+            with open(bmd_note, "w") as f:
+                f.write("# Mesh import note\n")
+                f.write("# If cgnsToFoam is not available, generate blockMeshDict:\n")
+                f.write("#   from astraturbo.mesh.multiblock import ...\n")
+                f.write("#   mesh.export_openfoam('system/blockMeshDict')\n")
+                f.write("# Then re-run: bash Allrun\n")
 
         return self._case_dir
 

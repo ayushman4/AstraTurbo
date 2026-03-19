@@ -113,6 +113,7 @@ def main():
     cfd_parser.add_argument("--total-pressure", type=float, default=101325.0, help="Inlet total pressure (Pa)")
     cfd_parser.add_argument("--total-temperature", type=float, default=288.15, help="Inlet total temperature (K)")
     cfd_parser.add_argument("-o", "--output", default="cfd_case", help="Output case directory")
+    cfd_parser.add_argument("--report", type=str, default=None, help="Generate HTML report with CFD results")
 
     # --- meanline ---
     ml_parser = subparsers.add_parser("meanline", help="Meanline compressor design")
@@ -160,6 +161,7 @@ def main():
     pipe_parser.add_argument("--cl0", type=float, default=None, help="Override CL0 (auto from meanline if omitted)")
     pipe_parser.add_argument("--cfd-output", default=None, help="CFD case output directory")
     pipe_parser.add_argument("--compressible", action="store_true", help="Use compressible CFD")
+    pipe_parser.add_argument("--report", type=str, default=None, help="Generate HTML report to this file")
 
     # --- centrifugal ---
     cent_parser = subparsers.add_parser("centrifugal", help="Centrifugal compressor meanline design")
@@ -812,6 +814,27 @@ def _cmd_cfd(args):
         print(f"\n  Next steps:")
         print(f"    cd {output} && bash run_su2.sh")
 
+    # Report with CFD results (if solution exists)
+    report_path = getattr(args, 'report', None)
+    if report_path:
+        from astraturbo.reports import generate_report, ReportConfig
+        cfg = ReportConfig(
+            title=f"CFD Analysis — {args.solver.upper()}",
+            output_path=report_path,
+        )
+        cfd_solution = None
+        cfd_residuals = None
+        try:
+            from astraturbo.cfd.postprocess import read_openfoam_solution, read_openfoam_residuals
+            cfd_solution = read_openfoam_solution(str(output))
+            log_file = output / "solver.log"
+            if log_file.exists():
+                cfd_residuals = read_openfoam_residuals(str(log_file))
+        except Exception:
+            pass
+        generate_report(config=cfg, cfd_solution=cfd_solution, cfd_residuals=cfd_residuals)
+        print(f"\nReport generated: {report_path}")
+
 
 def _cmd_meanline(args):
     """Run meanline compressor design."""
@@ -922,12 +945,24 @@ def _cmd_meanline(args):
             from astraturbo.design.compressor_map import generate_compressor_map as _gm
             rpm_fracs = [float(x) for x in args.rpm_fractions.split(",")]
             cmap_result = _gm(result, rpm_fractions=rpm_fracs)
+        # Generate blade profile for report embedding
+        profile_coords = None
+        try:
+            from astraturbo.camberline import NACA65
+            from astraturbo.thickness import NACA65Series
+            from astraturbo.profile import Superposition
+            cl0 = params[0]["rotor_camber_deg"] / 25.0 if params else 1.0
+            prof = Superposition(NACA65(cl0=max(0.2, min(cl0, 2.0))), NACA65Series())
+            profile_coords = prof.as_array()
+        except Exception:
+            pass
         path = generate_report(
             config=cfg,
             meanline_result=result,
             off_design_result=od_result,
             compressor_map=cmap_result,
             blade_params=params,
+            profile_coords=profile_coords,
         )
         print(f"\nReport generated: {path}")
 
@@ -1184,6 +1219,43 @@ def _cmd_pipeline(args):
 
     if not result.success:
         sys.exit(1)
+
+    # Generate report from pipeline results
+    report_path = getattr(args, 'report', None)
+    if report_path:
+        from astraturbo.reports import generate_report, ReportConfig
+        cfg = ReportConfig(
+            title=f"Design Pipeline — PR {args.pr}",
+            output_path=report_path,
+        )
+        # Extract stage data
+        report_kwargs = {}
+        for stage in result.stages:
+            if stage.data:
+                if "meanline_result" in stage.data:
+                    report_kwargs["meanline_result"] = stage.data["meanline_result"]
+                if "blade_params" in stage.data:
+                    report_kwargs["blade_params"] = stage.data["blade_params"]
+                if "compressor_map" in stage.data:
+                    report_kwargs["compressor_map"] = stage.data["compressor_map"]
+                if "profile_coords" in stage.data:
+                    report_kwargs["profile_coords"] = stage.data["profile_coords"]
+                if "mesh" in stage.data:
+                    report_kwargs["mesh"] = stage.data["mesh"]
+        # Try to load CFD results if cfd_output was specified
+        if args.cfd_output:
+            try:
+                from astraturbo.cfd.postprocess import read_openfoam_solution, read_openfoam_residuals
+                cfd_solution = read_openfoam_solution(args.cfd_output)
+                if cfd_solution:
+                    report_kwargs["cfd_solution"] = cfd_solution
+                log_file = Path(args.cfd_output) / "solver.log"
+                if log_file.exists():
+                    report_kwargs["cfd_residuals"] = read_openfoam_residuals(str(log_file))
+            except Exception:
+                pass
+        generate_report(config=cfg, **report_kwargs)
+        print(f"\nReport generated: {report_path}")
 
 
 def _cmd_fea(args):

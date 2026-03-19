@@ -92,50 +92,132 @@ class MultiBlockMesh:
         write_cgns_structured(filepath, block_arrays, block_names, self.name)
 
     def export_openfoam(self, filepath: str | Path) -> None:
-        """Export to OpenFOAM blockMeshDict format."""
+        """Export to OpenFOAM blockMeshDict format.
+
+        Generates a valid blockMeshDict with correct hex vertex ordering
+        (right-hand rule) for OpenFOAM's blockMesh utility.
+
+        For 2D meshes (dim=2), extrudes to 3D by adding z=0 and z=1 layers.
+        Reads block.patches to assign named boundary patches (inlet, outlet,
+        blade, periodic).
+        """
         from ..export.openfoam_writer import write_blockmeshdict
 
         all_vertices = []
         all_blocks_def = []
-        all_patches = []
         vertex_offset = 0
+
+        # Collect patch faces: {name: {"type": ..., "faces": [...]}}
+        patch_map: dict[str, dict] = {}
+        _of_type = {
+            "blade": "wall", "inlet": "patch", "outlet": "patch",
+            "periodic_upper": "cyclic", "periodic_lower": "cyclic",
+            "hub": "wall", "shroud": "wall",
+        }
 
         for block in self.blocks:
             ni, nj = block.points.shape[0], block.points.shape[1]
             dim = block.points.shape[2]
 
-            # Corner vertices (for 2D blocks, extend to 3D)
             corners_2d = [
-                block.points[0, 0],      # 0: bottom-left
-                block.points[-1, 0],     # 1: bottom-right
-                block.points[-1, -1],    # 2: top-right
-                block.points[0, -1],     # 3: top-left
+                block.points[0, 0],
+                block.points[-1, 0],
+                block.points[-1, -1],
+                block.points[0, -1],
             ]
 
-            for c in corners_2d:
-                if dim == 2:
-                    all_vertices.append(np.array([c[0], c[1], 0.0]))
-                    all_vertices.append(np.array([c[0], c[1], 1.0]))
-                else:
-                    all_vertices.append(c)
-
             if dim == 2:
-                # 8 vertices for hex block from 4 corner 2D points
+                # Check winding: positive cross_z = CCW (correct)
+                edge01 = corners_2d[1] - corners_2d[0]
+                edge03 = corners_2d[3] - corners_2d[0]
+                cross_z = edge01[0] * edge03[1] - edge01[1] * edge03[0]
+                if cross_z < 0:
+                    corners_2d = [corners_2d[0], corners_2d[3],
+                                  corners_2d[2], corners_2d[1]]
+
+                for c in corners_2d:
+                    all_vertices.append(np.array([c[0], c[1], 0.0]))
+                for c in corners_2d:
+                    all_vertices.append(np.array([c[0], c[1], 1.0]))
+
                 v = vertex_offset
                 all_blocks_def.append({
-                    "vertices": [v, v+2, v+4, v+6, v+1, v+3, v+5, v+7],
+                    "vertices": [v, v+1, v+2, v+3, v+4, v+5, v+6, v+7],
                     "cells": [ni - 1, nj - 1, 1],
-                    "grading": [block.grading_i, block.grading_j, 1],
+                    "grading": [1, 1, 1],
+                })
+
+                # Face definitions for this hex
+                face_defs = {
+                    "bottom": [v, v+1, v+5, v+4],
+                    "top":    [v+3, v+7, v+6, v+2],
+                    "left":   [v, v+4, v+7, v+3],
+                    "right":  [v+1, v+2, v+6, v+5],
+                }
+
+                # z-faces → frontAndBack (empty for 2D)
+                if "frontAndBack" not in patch_map:
+                    patch_map["frontAndBack"] = {"type": "empty", "faces": []}
+                patch_map["frontAndBack"]["faces"].append([v+4, v+5, v+6, v+7])
+                patch_map["frontAndBack"]["faces"].append([v, v+3, v+2, v+1])
+
+                # Map block.patches to named boundary faces
+                for face_name, boundary_name in block.patches.items():
+                    if face_name in face_defs:
+                        of_type = _of_type.get(boundary_name, "patch")
+                        if boundary_name not in patch_map:
+                            patch_map[boundary_name] = {"type": of_type, "faces": []}
+                        patch_map[boundary_name]["faces"].append(face_defs[face_name])
+
+                vertex_offset += 8
+            elif len(block.points.shape) == 4:
+                # True 3D block: shape (ni, nj, nk, 3)
+                ni, nj, nk = block.points.shape[:3]
+                # 8 corners: bottom face (k=0), top face (k=-1)
+                c = [
+                    block.points[0,    0,    0],     # 0: bottom
+                    block.points[-1,   0,    0],     # 1
+                    block.points[-1,  -1,    0],     # 2
+                    block.points[0,   -1,    0],     # 3
+                    block.points[0,    0,   -1],     # 4: top
+                    block.points[-1,   0,   -1],     # 5
+                    block.points[-1,  -1,   -1],     # 6
+                    block.points[0,   -1,   -1],     # 7
+                ]
+                # Check winding: bottom face (0,1,2,3) must be CCW when viewed from outside
+                # Cross product (c1-c0) × (c3-c0) should point in same direction as (c4-c0)
+                e01 = c[1] - c[0]
+                e03 = c[3] - c[0]
+                normal = np.cross(e01, e03)
+                e04 = c[4] - c[0]
+                if np.dot(normal, e04) < 0:
+                    # Flip bottom face winding: swap 1↔3, 5↔7
+                    c = [c[0], c[3], c[2], c[1], c[4], c[7], c[6], c[5]]
+
+                for corner in c:
+                    all_vertices.append(np.array([float(corner[0]), float(corner[1]), float(corner[2])]))
+                v = vertex_offset
+                all_blocks_def.append({
+                    "vertices": list(range(v, v + 8)),
+                    "cells": [ni - 1, nj - 1, nk - 1],
+                    "grading": [1, 1, 1],
                 })
                 vertex_offset += 8
             else:
+                for c in corners_2d:
+                    all_vertices.append(c)
                 v = vertex_offset
                 all_blocks_def.append({
                     "vertices": list(range(v, v + len(corners_2d))),
                     "cells": [ni - 1, nj - 1, 1],
-                    "grading": [block.grading_i, block.grading_j, 1],
+                    "grading": [1, 1, 1],
                 })
                 vertex_offset += len(corners_2d)
+
+        all_patches = [
+            {"name": n, "type": info["type"], "faces": info["faces"]}
+            for n, info in patch_map.items()
+        ]
 
         vertices_array = np.array(all_vertices, dtype=np.float64)
         write_blockmeshdict(filepath, vertices_array, all_blocks_def, all_patches)
@@ -356,8 +438,8 @@ def generate_blade_passage_mesh(
         n = len(pts)
         normals = np.zeros_like(pts)
         for i in range(n):
-            ip = (i + 1) % n
-            im = (i - 1) % n
+            ip = min(i + 1, n - 1)
+            im = max(i - 1, 0)
             tangent = pts[ip] - pts[im]
             normals[i] = np.array([-tangent[1], tangent[0]])
             nl = np.linalg.norm(normals[i])

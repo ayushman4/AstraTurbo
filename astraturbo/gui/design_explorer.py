@@ -323,6 +323,21 @@ class DesignExplorerDialog(QDialog):
                     r_hub=0.15, r_tip=0.30,
                 )
                 kwargs["meanline_result"] = result
+                try:
+                    from ..camberline import NACA65
+                    from ..thickness import NACA65Series
+                    from ..profile import Superposition
+                    prof = Superposition(NACA65(cl0=1.0), NACA65Series())
+                    kwargs["profile_coords"] = prof.as_array()
+                    # Generate a quick mesh for report embedding
+                    from ..mesh.multiblock import generate_blade_passage_mesh
+                    kwargs["mesh"] = generate_blade_passage_mesh(
+                        profile=kwargs["profile_coords"], pitch=0.05,
+                        n_blade=40, n_ogrid=10, n_inlet=15, n_outlet=15, n_passage=20,
+                        ogrid_thickness=0.005,
+                    )
+                except Exception:
+                    pass
             elif mode == "Turbine":
                 from ..design.turbine import meanline_turbine
                 result = meanline_turbine(

@@ -42,7 +42,7 @@ python -m astraturbo --version
 # astraturbo 0.1.0
 
 python -m pytest tests/ -q
-# ~550 passed
+# ~650 passed
 ```
 
 ---
@@ -298,9 +298,26 @@ python -m astraturbo engine-cycle --opr 8 --tit 1400 --mass-flow 20 --rpm 15000 
 ### Design reports
 
 ```bash
-# Generate HTML report from axial compressor design
+# Generate HTML report with embedded images (station diagrams, blade profiles, mesh)
 python -m astraturbo meanline --pr 2.1 --mass-flow 20 --rpm 17189 \
   --r-hub 0.178 --r-tip 0.252 --map --report design_report.html
+
+# Engine cycle report with station P/T chart
+python -m astraturbo engine-cycle --opr 20 --tit 1700 --mass-flow 20 --rpm 15000 \
+  --report engine_report.html
+```
+
+### Military jet engine pipeline (Kaveri, F414, M88)
+
+```bash
+# Run all 3 engines end-to-end: cycle → compressor → turbine → profile → 3D blade → mesh → OpenFOAM
+python examples/kaveri_pipeline/run_engines.py
+
+# Each engine produces:
+#   - HTML report with station charts, blade profiles, mesh wireframes
+#   - CGNS mesh file
+#   - Complete OpenFOAM case (Allrun, BCs, MRF, compressible k-ω SST)
+#   - 2D blade profile CSV
 ```
 
 ### 3D blade building
@@ -819,7 +836,7 @@ astraturbo/
 ├── optimization/    pymoo-based multi-objective + multi-fidelity optimization
 ├── solver/          Throughflow (S2m) solver with loss models
 ├── database/        SQLite design database (save/search/compare/export)
-├── reports/         HTML design report generator
+├── reports/         HTML design report generator with matplotlib visualizations
 ├── hpc/             HPC backends: Local, SLURM, PBS, AWS Batch + auto-provisioner
 ├── gui/             PySide6 GUI with 3D viewer + AI chat panel
 └── cli/             30+ commands (profile, mesh, blade, pipeline, meanline, cfd, fea, hpc, electric-motor, propeller, pump, turbopump, cooling, ...)
@@ -981,7 +998,7 @@ print(f"Yield at 973K: {props['yield_strength_MPa']:.0f} MPa (room: 1035 MPa)")
 | anthropic | Claude AI assistant | Optional (`[ai]`) |
 | boto3 | AWS Batch HPC backend | Optional (`[aws]`) |
 | cadquery | STEP/IGES CAD export | Optional (`[cad]`) |
-| matplotlib | CLI profile plotting (`--plot`) | Optional |
+| matplotlib | Report plots & CLI profile visualization | Yes |
 
 All cross-platform (Windows, Linux, macOS).
 
@@ -992,13 +1009,13 @@ All cross-platform (Windows, Linux, macOS).
 ```bash
 pip install -e ".[dev]"
 pytest tests/ -v
-# 551+ tests pass (unit, integration, validation, GUI, CLI)
+# 650+ tests pass (unit, integration, validation, GUI, CLI)
 ```
 
 ### Test coverage
 
-- **Unit tests**: Foundation, camberline, thickness, profile, blade, NURBS, mesh, export, design, FEA, CFD, electric motor, propeller, pump, turbopump, cooling
-- **Integration tests**: CLI commands (38 tests), GUI components (29 tests), AI tools (9 tests)
+- **Unit tests**: Foundation, camberline, thickness, profile, blade, NURBS, mesh, export, design, FEA, CFD, electric motor, propeller, pump, turbopump, cooling, report plots
+- **Integration tests**: CLI commands (38 tests), GUI components (29 tests), AI tools (9 tests), report image embedding, end-to-end pipeline
 - **Validation tests**: Velocity triangles, meanline thermodynamics, NACA 65 profiles, mesh quality bounds, off-design compressor maps, NASA Rotor 37
 - **Security tests**: XXE prevention, deserialization whitelisting, command injection prevention
 

@@ -16,6 +16,31 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from .plots import (
+    plot_blade_loading,
+    plot_blade_profile,
+    plot_cfd_pressure_field,
+    plot_cfd_residuals,
+    plot_cfd_temperature_field,
+    plot_cfd_velocity_field,
+    plot_compressor_map_chart,
+    plot_cooling_rows,
+    plot_engine_stations,
+    plot_mesh_2d,
+    plot_motor_summary,
+    plot_propeller_summary,
+    plot_ts_diagram,
+    plot_turbopump_power,
+    plot_velocity_triangles,
+)
+
+
+def _embed_img(b64: str) -> str:
+    """Return an <img> tag with base64 data URI, or empty string."""
+    if not b64:
+        return ""
+    return f'<img src="data:image/png;base64,{b64}" style="max-width:100%; margin:10px 0;">'
+
 
 @dataclass
 class ReportConfig:
@@ -86,6 +111,10 @@ def _footer() -> str:
 def _meanline_section(result) -> str:
     """Generate meanline design summary section."""
     lines = ["<h2>Meanline Design Summary</h2>"]
+
+    img_vt = _embed_img(plot_velocity_triangles(result))
+    if img_vt:
+        lines.append(img_vt)
 
     # Overall performance box
     lines.append("<div class='summary-box'>")
@@ -177,6 +206,10 @@ def _off_design_section(od_result) -> str:
 def _compressor_map_section(cmap) -> str:
     """Generate compressor map section."""
     lines = ["<h2>Compressor Map</h2>"]
+
+    img_map = _embed_img(plot_compressor_map_chart(cmap))
+    if img_map:
+        lines.append(img_map)
 
     if cmap.design_point:
         dp = cmap.design_point
@@ -282,6 +315,10 @@ def _material_section(material, temperature: float | None = None) -> str:
 def _turbine_section(result) -> str:
     """Generate turbine design summary section."""
     lines = ["<h2>Turbine Meanline Design</h2>"]
+
+    img_vt = _embed_img(plot_velocity_triangles(result))
+    if img_vt:
+        lines.append(img_vt)
 
     lines.append("<div class='summary-box'>")
     lines.append(f"<strong>Stages:</strong> {result.n_stages} &nbsp;&nbsp;")
@@ -463,6 +500,14 @@ def _engine_cycle_section(result) -> str:
     """Generate engine cycle analysis section."""
     lines = ["<h2>Engine Cycle Analysis</h2>"]
 
+    img = _embed_img(plot_engine_stations(result))
+    if img:
+        lines.append(img)
+
+    img_ts = _embed_img(plot_ts_diagram(result))
+    if img_ts:
+        lines.append(img_ts)
+
     # Summary box
     lines.append("<div class='summary-box'>")
     lines.append(f"<strong>Type:</strong> {result.engine_type.upper()} &nbsp;&nbsp;")
@@ -548,6 +593,11 @@ def _engine_cycle_section(result) -> str:
 def _electric_motor_section(result) -> str:
     """Generate electric motor section."""
     lines = ["<h2>Electric Motor Sizing</h2>"]
+
+    img = _embed_img(plot_motor_summary(result))
+    if img:
+        lines.append(img)
+
     lines.append("<div class='summary-box'>")
     lines.append(f"<strong>Type:</strong> {result.motor_type} &nbsp;&nbsp;")
     lines.append(f"<strong>Power:</strong> {result.shaft_power/1000:.1f} kW &nbsp;&nbsp;")
@@ -573,6 +623,11 @@ def _electric_motor_section(result) -> str:
 def _propeller_section(result) -> str:
     """Generate propeller/rotor section."""
     lines = ["<h2>Propeller / Rotor Design</h2>"]
+
+    img = _embed_img(plot_propeller_summary(result))
+    if img:
+        lines.append(img)
+
     lines.append("<div class='summary-box'>")
     lines.append(f"<strong>Thrust:</strong> {result.thrust:.1f} N &nbsp;&nbsp;")
     lines.append(f"<strong>Power:</strong> {result.power/1000:.1f} kW &nbsp;&nbsp;")
@@ -627,6 +682,11 @@ def _pump_section(result) -> str:
 def _turbopump_section(result) -> str:
     """Generate turbopump section."""
     lines = ["<h2>Turbopump Assembly</h2>"]
+
+    img = _embed_img(plot_turbopump_power(result))
+    if img:
+        lines.append(img)
+
     lines.append("<div class='summary-box'>")
     lines.append(f"<strong>Cycle:</strong> {result.cycle_type.replace('_', ' ').title()} &nbsp;&nbsp;")
     lines.append(f"<strong>RPM:</strong> {result.shaft_rpm:.0f} &nbsp;&nbsp;")
@@ -661,6 +721,11 @@ def _turbopump_section(result) -> str:
 def _cooling_section(result) -> str:
     """Generate blade cooling section."""
     lines = ["<h2>Turbine Blade Cooling</h2>"]
+
+    img = _embed_img(plot_cooling_rows(result))
+    if img:
+        lines.append(img)
+
     lines.append("<div class='summary-box'>")
     lines.append(f"<strong>Type:</strong> {result.cooling_type} (&phi;={result.phi:.2f}) &nbsp;&nbsp;")
     lines.append(f"<strong>T<sub>gas</sub>:</strong> {result.T_gas:.0f} K &nbsp;&nbsp;")
@@ -700,6 +765,10 @@ def generate_report(
     pump_result=None,
     turbopump_result=None,
     cooling_result=None,
+    profile_coords=None,
+    mesh=None,
+    cfd_solution=None,
+    cfd_residuals=None,
 ) -> str:
     """Generate an HTML design report.
 
@@ -767,6 +836,16 @@ def generate_report(
             )
         parts.append("</table>")
 
+    if profile_coords is not None:
+        img = _embed_img(plot_blade_profile(profile_coords))
+        if img:
+            parts.append("<h2>Blade Profile</h2>")
+            parts.append(img)
+        img_load = _embed_img(plot_blade_loading(profile_coords))
+        if img_load:
+            parts.append("<h2>Blade Surface Loading</h2>")
+            parts.append(img_load)
+
     if electric_motor_result is not None:
         parts.append(_electric_motor_section(electric_motor_result))
 
@@ -781,6 +860,33 @@ def generate_report(
 
     if cooling_result is not None:
         parts.append(_cooling_section(cooling_result))
+
+    if mesh is not None:
+        img = _embed_img(plot_mesh_2d(mesh))
+        if img:
+            parts.append("<h2>Computational Mesh</h2>")
+            parts.append(img)
+
+    if cfd_solution is not None:
+        parts.append("<h2>CFD Results</h2>")
+        img_p = _embed_img(plot_cfd_pressure_field(cfd_solution))
+        if img_p:
+            parts.append("<h3>Pressure Field</h3>")
+            parts.append(img_p)
+        img_v = _embed_img(plot_cfd_velocity_field(cfd_solution))
+        if img_v:
+            parts.append("<h3>Velocity Field</h3>")
+            parts.append(img_v)
+        img_t = _embed_img(plot_cfd_temperature_field(cfd_solution))
+        if img_t:
+            parts.append("<h3>Temperature Field</h3>")
+            parts.append(img_t)
+
+    if cfd_residuals is not None:
+        img_r = _embed_img(plot_cfd_residuals(cfd_residuals))
+        if img_r:
+            parts.append("<h3>Solver Convergence</h3>")
+            parts.append(img_r)
 
     parts.append(_footer())
 

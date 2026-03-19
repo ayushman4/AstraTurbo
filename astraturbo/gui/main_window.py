@@ -1005,6 +1005,31 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Meanline Error", f"{e}\n\n{traceback.format_exc()}")
 
     # ----------------------------------------------------------------
+    # Report helpers
+    # ----------------------------------------------------------------
+
+    def _get_extra_report_kwargs(self) -> dict:
+        """Return mesh and CFD data for report generation if available."""
+        kwargs = {}
+        if self._last_mesh is not None:
+            kwargs["mesh"] = self._last_mesh
+        if self._last_cfd_case:
+            try:
+                from ..cfd.postprocess import read_openfoam_solution, read_openfoam_residuals
+                from pathlib import Path
+                sol = read_openfoam_solution(self._last_cfd_case)
+                if sol:
+                    kwargs["cfd_solution"] = sol
+                log_file = Path(self._last_cfd_case) / "solver.log"
+                if log_file.exists():
+                    res = read_openfoam_residuals(str(log_file))
+                    if res:
+                        kwargs["cfd_residuals"] = res
+            except Exception:
+                pass
+        return kwargs
+
+    # ----------------------------------------------------------------
     # Centrifugal compressor
     # ----------------------------------------------------------------
 
@@ -1044,7 +1069,7 @@ class MainWindow(QMainWindow):
                 if path:
                     from ..reports import generate_report, ReportConfig
                     cfg = ReportConfig(title=f"Centrifugal Compressor — PR {pr}", output_path=path)
-                    generate_report(config=cfg, centrifugal_result=result)
+                    generate_report(config=cfg, centrifugal_result=result, **self._get_extra_report_kwargs())
                     self.statusBar().showMessage(f"Report saved: {path}")
         except Exception as e:
             QMessageBox.warning(self, "Centrifugal Error", f"{e}\n\n{traceback.format_exc()}")
@@ -1123,7 +1148,7 @@ class MainWindow(QMainWindow):
                     if generate_map:
                         from ..design.turbine_off_design import generate_turbine_map as _gtm
                         tmap_result = _gtm(result)
-                    generate_report(config=cfg, turbine_result=result, turbine_map=tmap_result)
+                    generate_report(config=cfg, turbine_result=result, turbine_map=tmap_result, **self._get_extra_report_kwargs())
                     self.statusBar().showMessage(f"Report saved: {path}")
         except Exception as e:
             QMessageBox.warning(self, "Turbine Error", f"{e}\n\n{traceback.format_exc()}")
@@ -1274,7 +1299,7 @@ class MainWindow(QMainWindow):
                         title=f"Engine Cycle — {engine_type.upper()} OPR={opr} TIT={tit}K",
                         output_path=path,
                     )
-                    generate_report(config=cfg, engine_cycle_result=result)
+                    generate_report(config=cfg, engine_cycle_result=result, **self._get_extra_report_kwargs())
                     self.statusBar().showMessage(f"Report saved: {path}")
         except Exception as e:
             QMessageBox.warning(self, "Engine Cycle Error", f"{e}\n\n{traceback.format_exc()}")

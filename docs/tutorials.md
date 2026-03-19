@@ -1130,6 +1130,87 @@ python -m astraturbo formats
 
 ---
 
+## Tutorial 12: Report Visualizations
+
+HTML reports embed matplotlib-generated plots as base64 PNG images — no external files needed.
+
+### Available plot functions
+
+| Function | Input | Visualization |
+|----------|-------|---------------|
+| `plot_engine_stations(result)` | `EngineCycleResult` | Dual-axis bar chart: P (kPa) left, T (K) right, per station |
+| `plot_blade_profile(coords)` | `np.ndarray (N,2)` | Airfoil shape with blue fill, red dashed camber |
+| `plot_cooling_rows(result)` | `CoolingResult` | Grouped bars: effectiveness + coolant fraction per row |
+| `plot_turbopump_power(result)` | `TurbopumpResult` | Horizontal bars: pump/turbine/shaft power + margin |
+| `plot_propeller_summary(result)` | `PropellerResult` | Multi-metric bar: FM, tip Mach, disk loading, CT, CP |
+| `plot_motor_summary(result)` | `ElectricMotorResult` | Key metrics: efficiency, thermal margin, power density |
+| `plot_mesh_2d(mesh)` | `MultiBlockMesh` | 2D wireframe grid of all mesh blocks |
+
+### Generate a report with images
+
+```python
+from astraturbo.design.engine_cycle import engine_cycle
+from astraturbo.design import meanline_compressor, meanline_to_blade_parameters
+from astraturbo.camberline import NACA65
+from astraturbo.thickness import NACA65Series
+from astraturbo.profile import Superposition
+from astraturbo.mesh.multiblock import generate_blade_passage_mesh
+from astraturbo.reports import generate_report, ReportConfig
+
+# Run solvers
+ec = engine_cycle(overall_pressure_ratio=20.0, turbine_inlet_temp=1700.0,
+                  mass_flow=20.0, rpm=15000, r_hub=0.15, r_tip=0.30)
+comp = meanline_compressor(overall_pressure_ratio=4.0, mass_flow=20.0,
+                           rpm=15000, r_hub=0.15, r_tip=0.30)
+bp = meanline_to_blade_parameters(comp)
+
+# Generate profile and mesh
+prof = Superposition(NACA65(cl0=1.0), NACA65Series())
+coords = prof.as_array()
+mesh = generate_blade_passage_mesh(profile=coords, pitch=0.05,
+                                    n_blade=30, n_ogrid=8)
+
+# Report with embedded station chart, blade profile, and mesh wireframe
+generate_report(
+    config=ReportConfig(title="Full Design Report", output_path="report.html"),
+    engine_cycle_result=ec,
+    meanline_result=comp,
+    blade_params=bp,
+    profile_coords=coords,
+    mesh=mesh,
+)
+# Open report.html — images are self-contained, no external dependencies
+```
+
+### Use individual plot functions
+
+```python
+from astraturbo.reports.plots import plot_engine_stations, plot_blade_profile
+import base64
+
+# Get base64 PNG string
+b64 = plot_engine_stations(ec)
+# Embed in any HTML:  <img src="data:image/png;base64,{b64}">
+
+# Or save to file
+with open("stations.png", "wb") as f:
+    f.write(base64.b64decode(b64))
+```
+
+### Military engine pipeline
+
+Run all three engines (Kaveri, F414, M88) end-to-end with reports:
+
+```bash
+python examples/kaveri_pipeline/run_engines.py
+# Produces per-engine:
+#   - HTML report with station charts, blade profiles, mesh wireframes
+#   - CGNS mesh
+#   - Complete OpenFOAM case (compressible k-ω SST with MRF)
+```
+
+---
+
 ## Complete End-to-End Example
 
 Design a compressor from requirements to CFD-ready mesh in one script:
