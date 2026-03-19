@@ -42,7 +42,7 @@ python -m astraturbo --version
 # astraturbo 0.1.0
 
 python -m pytest tests/ -q
-# ~650 passed
+# 641 passed
 ```
 
 ---
@@ -298,26 +298,39 @@ python -m astraturbo engine-cycle --opr 8 --tit 1400 --mass-flow 20 --rpm 15000 
 ### Design reports
 
 ```bash
-# Generate HTML report with embedded images (station diagrams, blade profiles, mesh)
+# Compressor report with blade profile + loading images
 python -m astraturbo meanline --pr 2.1 --mass-flow 20 --rpm 17189 \
   --r-hub 0.178 --r-tip 0.252 --map --report design_report.html
 
-# Engine cycle report with station P/T chart
+# Engine cycle report with station P/T chart and T-s diagram
 python -m astraturbo engine-cycle --opr 20 --tit 1700 --mass-flow 20 --rpm 15000 \
   --report engine_report.html
+
+# CFD report with pressure/velocity fields and residual convergence
+python -m astraturbo cfd --solver openfoam --velocity 150 -o cfd_case --report cfd_report.html
+
+# Full pipeline report (meanline + profile + mesh + CFD)
+python -m astraturbo pipeline --pr 2.0 --mass-flow 20 --rpm 15000 \
+  --cfd-output ./cfd_case --report pipeline_report.html
 ```
 
 ### Military jet engine pipeline (Kaveri, F414, M88)
 
 ```bash
-# Run all 3 engines end-to-end: cycle → compressor → turbine → profile → 3D blade → mesh → OpenFOAM
-python examples/kaveri_pipeline/run_engines.py
+# Demo pipeline: 3 engines × 9 stages (cycle → compressor → turbine → profile → 3D blade → mesh → OpenFOAM → report)
+python examples/pipeline/run_engines.py
 
-# Each engine produces:
-#   - HTML report with station charts, blade profiles, mesh wireframes
-#   - CGNS mesh file
-#   - Complete OpenFOAM case (Allrun, BCs, MRF, compressible k-ω SST)
-#   - 2D blade profile CSV
+# Production pipeline: converged CFD with 3360-cell O-grid meshes, k-ω SST, 11-image HTML reports
+python examples/pipeline/run_production.py
+
+# All 3 engines converge:
+#   Kaveri GTX-35VS  — 96.8 kN thrust, 352 iterations
+#   GE F414          — 101.3 kN thrust, 88 iterations
+#   Safran M88       — 79.1 kN thrust, 1000 iterations
+#
+# Reports include: engine station chart, T-s diagram, velocity triangles,
+# compressor map, blade profile, blade loading, mesh wireframe,
+# CFD pressure field, CFD velocity field, residual convergence
 ```
 
 ### 3D blade building
@@ -337,6 +350,10 @@ python -m astraturbo blade --r-hub 0.15 --r-tip 0.25 \
 python -m astraturbo pipeline --pr 1.5 --mass-flow 20 --rpm 15000
 python -m astraturbo pipeline --pr 2.1 --mass-flow 20 --rpm 17189 \
   --compressible --cfd-output ./cfd_case
+
+# With HTML report
+python -m astraturbo pipeline --pr 2.0 --mass-flow 20 --rpm 15000 \
+  --report pipeline_report.html
 ```
 
 ### FEA setup
@@ -786,7 +803,8 @@ meanline design (axial compressor + centrifugal + turbine), engine cycle analysi
 (turbojet/turboshaft), off-design analysis,
 compressor maps, profile generation, 3D blade building, mesh generation and export,
 CFD setup, solver execution, FEA setup, y+ calculator, full design pipeline, design
-database, HTML report generation, file inspection, material database,
+database, HTML report generation (with CFD field plots, mesh images, blade profiles),
+file inspection, material database,
 electric motor sizing, propeller design, turbopump analysis, rocket pump design,
 cooling system analysis.
 
@@ -827,7 +845,7 @@ astraturbo/
 │   ├── smoothing      Laplacian + orthogonality smoothing
 │   └── quality        Aspect ratio, skewness, y+ estimation
 ├── export/          30 formats: CGNS, OpenFOAM, Tecplot, VTK, Fluent, etc.
-├── cfd/             4 solvers: OpenFOAM, Fluent, CFX, SU2
+├── cfd/             4 solvers: OpenFOAM, Fluent, CFX, SU2 + post-processing (field reader, residual parser)
 ├── fea/             Structural analysis: CalculiX/Abaqus
 │   ├── material       32 turbomachinery materials database
 │   ├── calculix       Input file generation
@@ -836,7 +854,7 @@ astraturbo/
 ├── optimization/    pymoo-based multi-objective + multi-fidelity optimization
 ├── solver/          Throughflow (S2m) solver with loss models
 ├── database/        SQLite design database (save/search/compare/export)
-├── reports/         HTML design report generator with matplotlib visualizations
+├── reports/         HTML report generator with 15 matplotlib visualizations (engine stations, T-s diagram, velocity triangles, compressor map, blade profile, blade loading, mesh, CFD pressure/velocity fields, residual convergence)
 ├── hpc/             HPC backends: Local, SLURM, PBS, AWS Batch + auto-provisioner
 ├── gui/             PySide6 GUI with 3D viewer + AI chat panel
 └── cli/             30+ commands (profile, mesh, blade, pipeline, meanline, cfd, fea, hpc, electric-motor, propeller, pump, turbopump, cooling, ...)
@@ -1009,13 +1027,13 @@ All cross-platform (Windows, Linux, macOS).
 ```bash
 pip install -e ".[dev]"
 pytest tests/ -v
-# 650+ tests pass (unit, integration, validation, GUI, CLI)
+# 641 tests pass (unit, integration, validation, GUI, CLI)
 ```
 
 ### Test coverage
 
 - **Unit tests**: Foundation, camberline, thickness, profile, blade, NURBS, mesh, export, design, FEA, CFD, electric motor, propeller, pump, turbopump, cooling, report plots
-- **Integration tests**: CLI commands (38 tests), GUI components (29 tests), AI tools (9 tests), report image embedding, end-to-end pipeline
+- **Integration tests**: CLI commands (38 tests), GUI components (29 tests), AI tools (9 tests), report image embedding (7 tests), CFD field plots, end-to-end pipeline
 - **Validation tests**: Velocity triangles, meanline thermodynamics, NACA 65 profiles, mesh quality bounds, off-design compressor maps, NASA Rotor 37
 - **Security tests**: XXE prevention, deserialization whitelisting, command injection prevention
 
