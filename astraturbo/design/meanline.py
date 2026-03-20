@@ -323,10 +323,11 @@ def meanline_compressor(
     # Initial guess from total conditions
     C_axial = mass_flow / (rho_total * A)
     # Iterate to converge static density (5 iterations sufficient for M<0.8)
+    # Isentropic choking limit: T_static/T_total = 2/(gamma+1) at Mach 1.0
+    T_static_min = T_inlet * 2.0 / (gas.gamma + 1.0)
     for _ in range(5):
         T_static = T_inlet - C_axial**2 / (2.0 * gas.cp)
-        # Clamp to prevent choking (Mach > 1 implies T_static < T_inlet * 2/(gamma+1))
-        T_static = max(T_static, T_inlet * 0.5)
+        T_static = max(T_static, T_static_min)
         P_static = P_inlet * (T_static / T_inlet) ** (gas.gamma / (gas.gamma - 1))
         rho_static = P_static / (gas.R * T_static)
         C_axial = mass_flow / (rho_static * A)

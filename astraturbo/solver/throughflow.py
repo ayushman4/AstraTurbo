@@ -154,6 +154,7 @@ class ThroughflowSolver:
         self._inlet_Pt: float = 101325.0
         self._inlet_Tt: float = 288.15
         self._inlet_alpha: float = 0.0
+        self._mass_flow: float = 0.0
 
     def set_annulus(
         self,
@@ -181,6 +182,7 @@ class ThroughflowSolver:
         total_pressure: float = 101325.0,
         total_temperature: float = 288.15,
         flow_angle: float = 0.0,
+        mass_flow: float = 0.0,
     ) -> None:
         """Set inlet flow conditions.
 
@@ -188,9 +190,12 @@ class ThroughflowSolver:
             total_pressure: Inlet total pressure (Pa).
             total_temperature: Inlet total temperature (K).
             flow_angle: Inlet absolute flow angle (degrees from axial).
+            mass_flow: Mass flow rate (kg/s). Used to compute initial V_m.
         """
         self._inlet_Pt = total_pressure
         self._inlet_Tt = total_temperature
+        self._inlet_alpha = flow_angle
+        self._mass_flow = mass_flow
         self._inlet_alpha = flow_angle
 
     def solve(self) -> ThroughflowResult:
@@ -248,12 +253,17 @@ class ThroughflowSolver:
         rho = np.zeros((ns, nsl), dtype=np.float64)
 
         # Initial velocity estimate from mass flow and annulus area
-        # Assume uniform meridional velocity
         inlet_alpha_rad = np.radians(self._inlet_alpha)
-        T_static_init = self._inlet_Tt * 0.95  # Rough initial guess
+        T_static_init = self._inlet_Tt * 2.0 / (cfg.gamma + 1.0)  # Choking limit as lower bound
+        T_static_init = max(self._inlet_Tt * 0.95, T_static_init)
         rho_init = self._inlet_Pt / (cfg.R_gas * T_static_init)
         area_init = np.pi * (tip_r[0] ** 2 - hub_r[0] ** 2)
-        V_m_init = 150.0  # Default axial velocity estimate
+
+        # Compute V_m from continuity if mass flow is provided
+        if hasattr(self, '_mass_flow') and self._mass_flow > 0 and area_init > 0:
+            V_m_init = self._mass_flow / (rho_init * area_init * (1.0 - cfg.blockage_factor))
+        else:
+            V_m_init = 150.0  # Fallback
 
         V_m[:] = V_m_init
         V_theta[:] = V_m_init * np.tan(inlet_alpha_rad)

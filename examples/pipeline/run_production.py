@@ -60,8 +60,9 @@ def run_production(name: str, spec: dict, output_dir: Path) -> dict:
         afterburner_temp=spec["afterburner_temp"],
     )
     dt = time.perf_counter() - t1
+    sfc_kgkNh = ec_result.specific_fuel_consumption * 3600 * 1000  # kg/(N·s) → kg/(kN·h)
     print(f"  [1/8] Engine Cycle         ({dt:.2f}s)")
-    print(f"        Thrust: {ec_result.net_thrust/1000:.1f} kN, SFC: {ec_result.specific_fuel_consumption*3600:.4f}")
+    print(f"        Thrust: {ec_result.net_thrust/1000:.1f} kN, SFC: {sfc_kgkNh:.1f} kg/(kN·h)")
 
     # ── 2. LP Compressor + map ─────────────────────────────────────
     t1 = time.perf_counter()
@@ -126,6 +127,7 @@ def run_production(name: str, spec: dict, output_dir: Path) -> dict:
         total_pressure=ec_result.compressor_inlet_pressure if hasattr(ec_result, 'compressor_inlet_pressure') else 101325.0,
         total_temperature=ec_result.compressor_inlet_temperature if hasattr(ec_result, 'compressor_inlet_temperature') else 288.15,
         flow_angle=0.0,
+        mass_flow=spec["mass_flow"],
     )
 
     # Add blade rows from meanline
@@ -252,35 +254,47 @@ def run_production(name: str, spec: dict, output_dir: Path) -> dict:
     if validation["estimated_yplus"] is not None:
         print(f"        Est. y+: {validation['estimated_yplus']:.1f}")
 
-    # ── 6. OpenFOAM case (simpleFoam — incompressible, wall-function RANS) ──
+    # ── 6. OpenFOAM case (rhoSimpleFoam — compressible, wall-function RANS) ──
+    # GT2010-22194: compressible solver required for transonic compressor flows
     t1 = time.perf_counter()
-    from astraturbo.cfd.openfoam import write_simpleFoam_case
+    from astraturbo.cfd.openfoam import create_openfoam_case
 
     cfd_dir = output_dir / f"{name}_cfd"
-    write_simpleFoam_case(
+    inlet_Pt = ec_result.compressor_inlet_pressure if hasattr(ec_result, 'compressor_inlet_pressure') else 101325.0
+    inlet_Tt = ec_result.compressor_inlet_temperature if hasattr(ec_result, 'compressor_inlet_temperature') else 288.15
+
+    case = create_openfoam_case(
         case_dir=cfd_dir,
-        mesh=mesh,
-        inlet_velocity=150.0,
-        n_iterations=1000,
-        z_thickness=pitch * 0.01,  # thin 2D slab
+        solver="rhoSimpleFoam",
+        compressible=True,
+        total_pressure=inlet_Pt,
+        total_temperature=inlet_Tt,
+        inlet_velocity=comp.stations[0].C_axial if comp.stations else 150.0,
+        turbulence_model="kOmegaSST",
+        mesh_format="blockMesh",
     )
+
+    # Write blockMeshDict from our O10H mesh
+    mesh.export_openfoam(str(cfd_dir / "system" / "blockMeshDict"),
+                         z_thickness=pitch * 0.01)
     dt = time.perf_counter() - t1
-    print(f"  [6/8] CFD Case Setup       ({dt:.2f}s)  simpleFoam, 1000 iters")
+    print(f"  [6/8] CFD Case Setup       ({dt:.2f}s)  rhoSimpleFoam (compressible), 1000 iters")
 
     # ── 7. Run OpenFOAM ───────────────────────────────────────────
     cfd_solution = None
     cfd_residuals = None
 
-    if shutil.which("simpleFoam"):
-        of_prefix = []
-    elif shutil.which("openfoam"):
-        of_prefix = ["openfoam"]
+    if shutil.which("rhoSimpleFoam") or shutil.which("openfoam"):
+        if shutil.which("rhoSimpleFoam"):
+            of_prefix = []
+        else:
+            of_prefix = ["openfoam"]
     else:
         of_prefix = None
 
     if of_prefix is not None:
         t1 = time.perf_counter()
-        print(f"  [7/8] Running simpleFoam...", end="", flush=True)
+        print(f"  [7/8] Running rhoSimpleFoam...", end="", flush=True)
 
         log_path = cfd_dir / "solver.log"
         try:
@@ -293,9 +307,9 @@ def run_production(name: str, spec: dict, output_dir: Path) -> dict:
                 print(f" blockMesh failed")
                 log_path.write_text(proc_m.stdout + proc_m.stderr)
             else:
-                # simpleFoam
+                # rhoSimpleFoam (compressible solver per GT2010-22194)
                 proc = subprocess.run(
-                    of_prefix + ["simpleFoam", "-case", str(cfd_dir)],
+                    of_prefix + ["rhoSimpleFoam", "-case", str(cfd_dir)],
                     capture_output=True, text=True, timeout=600,
                 )
                 log_path.write_text(proc.stdout + proc.stderr)
