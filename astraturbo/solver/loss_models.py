@@ -104,8 +104,9 @@ def lieblein_profile_loss(
     # Surface roughness correction
     roughness_correction = 1.0 + 50.0 * surface_roughness
 
-    # Scale by solidity (loss scales roughly with solidity)
-    omega = omega_base * re_correction * roughness_correction * solidity
+    # Koch-Smith correlation already accounts for solidity via the
+    # diffusion factor definition; no additional solidity scaling.
+    omega = omega_base * re_correction * roughness_correction
 
     return float(max(omega, 0.0))
 
@@ -115,6 +116,7 @@ def ainley_mathieson_secondary_loss(
     outlet_angle: float,
     span: float,
     chord: float,
+    pitch: float | None = None,
     cl: float | None = None,
 ) -> float:
     """Compute secondary (endwall) loss using Ainley-Mathieson correlation.
@@ -122,9 +124,9 @@ def ainley_mathieson_secondary_loss(
     Secondary losses arise from the interaction of the boundary layer
     with the blade passage pressure gradient, creating passage vortices.
 
-    The correlation is:
+    The correlation is (Ainley & Mathieson, ARC R&M 2974, 1951):
         Y_sec = 0.0334 * f(inlet_angle) * (cos(alpha_2) / cos(alpha_1))
-                * (CL^2 / (s/c)) * (c/h)
+                * CL^2 * sigma * (c/h)
 
     Simplified form when CL is not available:
         Y_sec = 0.018 * sigma * (cos^2(alpha_2) / cos^3(alpha_m))
@@ -135,6 +137,8 @@ def ainley_mathieson_secondary_loss(
         outlet_angle: Exit flow angle (degrees from axial).
         span: Blade span / height (m).
         chord: Blade chord (m).
+        pitch: Blade pitch (m). Required for correct solidity scaling.
+            If None, solidity factor defaults to 1.0.
         cl: Lift coefficient (optional). If None, computed from angles.
 
     Returns:
@@ -152,12 +156,19 @@ def ainley_mathieson_secondary_loss(
     alpha_m = np.arctan(0.5 * (tan_a1 + tan_a2))
     cos_am = np.cos(alpha_m)
 
-    # Aspect ratio
+    # Aspect ratio and solidity
     aspect_ratio = span / chord if chord > 1e-10 else 1e10
+    solidity = chord / pitch if (pitch is not None and pitch > 1e-10) else 1.0
 
     if cl is not None:
         # Direct correlation with lift coefficient
-        y_sec = 0.0334 * (cos_a2 / max(cos_a1, 1e-10)) * cl**2 / aspect_ratio
+        y_sec = (
+            0.0334
+            * (cos_a2 / max(cos_a1, 1e-10))
+            * cl**2
+            * solidity
+            / aspect_ratio
+        )
     else:
         # Ainley-Mathieson simplified
         delta_tan = tan_a1 - tan_a2
@@ -165,8 +176,10 @@ def ainley_mathieson_secondary_loss(
             return 0.0
         y_sec = (
             0.018
+            * solidity
             * cos_a2**2
             / cos_am**3
+            * 2.0
             * delta_tan**2
             / aspect_ratio
         )
@@ -178,27 +191,19 @@ def tip_clearance_loss(
     clearance: float,
     span: float,
     loading: float,
-    efficiency_factor: float = 0.93,
 ) -> float:
-    """Compute tip clearance loss coefficient.
+    """Compute tip clearance loss coefficient using Denton's model.
 
-    Based on Denton's model:
-        delta_eta = k * (tau/h) * CL / (s/c)
-
-    Simplified correlation:
+    Denton (1993), "Loss Mechanisms in Turbomachines", ASME J. Turbomachinery:
         Y_tc = 0.7 * (tau / h) * (delta_Ctheta / U)
 
-    For general use:
-        Y_tc = B * (tau/h) * loading_parameter
-
-    where B ~ 0.5-0.7 depending on the tip geometry.
+    The coefficient 0.7 is the standard value for unshrouded rotors.
 
     Args:
         clearance: Tip clearance gap (m).
         span: Blade span (m).
-        loading: Loading parameter (delta_Ctheta / U or CL * sigma).
+        loading: Loading parameter (delta_Ctheta / U).
             Typical range 0.3-0.8.
-        efficiency_factor: Empirical coefficient (default 0.93 from Denton).
 
     Returns:
         Tip clearance loss coefficient.
@@ -207,7 +212,7 @@ def tip_clearance_loss(
         return 0.0
 
     tau_over_h = clearance / span
-    y_tc = (1.0 - efficiency_factor) * 2.0 * tau_over_h * loading
+    y_tc = 0.7 * tau_over_h * loading
 
     return float(max(y_tc, 0.0))
 

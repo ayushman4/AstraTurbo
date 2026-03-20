@@ -316,9 +316,20 @@ def meanline_compressor(
     U = omega * r_mean
 
     # Annulus area and axial velocity
+    # Use static density for continuity: m_dot = rho_static * C_axial * A
+    # Iterative solution: guess C_axial, compute T_static, rho_static, repeat.
     A = math.pi * (r_tip**2 - r_hub**2)
-    rho_inlet = P_inlet / (gas.R * T_inlet)
-    C_axial = mass_flow / (rho_inlet * A)
+    rho_total = P_inlet / (gas.R * T_inlet)
+    # Initial guess from total conditions
+    C_axial = mass_flow / (rho_total * A)
+    # Iterate to converge static density (5 iterations sufficient for M<0.8)
+    for _ in range(5):
+        T_static = T_inlet - C_axial**2 / (2.0 * gas.cp)
+        # Clamp to prevent choking (Mach > 1 implies T_static < T_inlet * 2/(gamma+1))
+        T_static = max(T_static, T_inlet * 0.5)
+        P_static = P_inlet * (T_static / T_inlet) ** (gas.gamma / (gas.gamma - 1))
+        rho_static = P_static / (gas.R * T_static)
+        C_axial = mass_flow / (rho_static * A)
 
     # Total work required
     T_outlet_ideal = T_inlet * overall_pressure_ratio ** ((gas.gamma - 1) / gas.gamma)

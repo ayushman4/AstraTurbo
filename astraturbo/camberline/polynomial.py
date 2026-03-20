@@ -73,9 +73,14 @@ class CubicPolynomial(CamberLine):
     def _get_coefficients(self) -> tuple[float, float, float]:
         slope_inlet = math.tan(np.deg2rad(self.angle_of_inflow) - np.pi / 2.0)
         slope_outlet = math.tan(np.pi / 2.0 - np.deg2rad(self.angle_of_outflow))
-        a3 = slope_inlet - math.tan(slope_outlet)
-        a2 = -slope_inlet - a3
+        # Constraints: y(0)=0, y(1)=0, y'(0)=slope_inlet, y'(1)=slope_outlet
+        # For y = a3*x^3 + a2*x^2 + a1*x:
+        #   a1 = slope_inlet
+        #   a3 = slope_inlet + slope_outlet  (from y(1)=0 and y'(1)=slope_outlet)
+        #   a2 = -a1 - a3
         a1 = slope_inlet
+        a3 = slope_inlet + slope_outlet
+        a2 = -a1 - a3
         return a1, a2, a3
 
     @memoize

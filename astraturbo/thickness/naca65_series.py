@@ -43,5 +43,5 @@ class NACA65Series(ThicknessDistribution):
         t = self.max_thickness
         x = self.distribution(self.sample_rate)
         e = 1.0 - E * x
-        y = t * x[::-1] * (A * np.sqrt(x) + x * (B + x * (C + x * D))) / e
+        y = t * (1.0 - x) * (A * np.sqrt(x) + x * (B + x * (C + x * D))) / e
         return np.column_stack((x, y))

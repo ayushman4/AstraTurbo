@@ -29,6 +29,6 @@ class JoukowskiThickness(ThicknessDistribution):
     @memoize
     def as_array(self) -> NDArray[np.float64]:
         x = self.distribution(self.sample_rate)
-        x_rev = x[::-1]  # (1 - x) reversed
+        x_rev = 1.0 - x
         y = self.max_thickness * 1.5396007178 * x_rev * np.sqrt(x_rev * x)
         return np.column_stack((x, y))

@@ -184,7 +184,7 @@ def _write_fv_schemes(filepath: Path, compressible: bool = False, is_rotating: b
         f.write("    div(phi,k) bounded Gauss upwind;\n")
         f.write("    div(phi,omega) bounded Gauss upwind;\n")
         if compressible:
-            f.write("    div(phi,e) bounded Gauss upwind;\n")
+            f.write("    div(phi,h) bounded Gauss upwind;\n")
             f.write("    div(phi,K) bounded Gauss upwind;\n")
             f.write("    div(phid,p) Gauss upwind;\n")
             f.write("    div(phi,Ekp) bounded Gauss upwind;\n")
@@ -216,7 +216,7 @@ def _write_fv_solution(filepath: Path, solver: str) -> None:
         f.write("    omega { solver smoothSolver; smoother GaussSeidel;\n")
         f.write("        tolerance 1e-06; relTol 0.1; }\n")
         if is_compressible:
-            f.write("    e { solver smoothSolver; smoother GaussSeidel;\n")
+            f.write("    h { solver smoothSolver; smoother GaussSeidel;\n")
             f.write("        tolerance 1e-06; relTol 0.1; }\n")
             f.write('    "rho.*" { solver PCG; preconditioner DIC;\n')
             f.write("        tolerance 1e-06; relTol 0.1; }\n")
@@ -226,15 +226,18 @@ def _write_fv_solution(filepath: Path, solver: str) -> None:
         f.write("    pRefCell 0;\n")
         f.write("    pRefValue 0;\n")
         if is_compressible:
-            f.write("    residualControl { p 1e-4; U 1e-4; e 1e-4; k 1e-4; omega 1e-4; }\n")
+            f.write("    transonic   no;\n")
+            f.write("    consistent  yes;\n")
+            f.write("    residualControl { p 1e-4; U 1e-4; h 1e-4; k 1e-4; omega 1e-4; }\n")
         else:
             f.write("    residualControl { p 1e-4; U 1e-4; k 1e-4; omega 1e-4; }\n")
         f.write("}\n\n")
         f.write("relaxationFactors\n{\n")
-        f.write("    fields { p 0.3; rho 0.5; }\n")
         if is_compressible:
-            f.write("    equations { U 0.7; e 0.5; k 0.7; omega 0.7; }\n")
+            f.write("    fields { p 0.15; rho 0.3; }\n")
+            f.write("    equations { U 0.5; h 0.3; k 0.5; omega 0.5; }\n")
         else:
+            f.write("    fields { p 0.3; rho 0.5; }\n")
             f.write("    equations { U 0.7; k 0.7; omega 0.7; }\n")
         f.write("}\n")
 
@@ -242,6 +245,7 @@ def _write_fv_solution(filepath: Path, solver: str) -> None:
 def _write_transport_properties(filepath: Path, viscosity: float) -> None:
     with open(filepath, "w") as f:
         _write_foam_header(f, "dictionary", "transportProperties")
+        f.write("transportModel  Newtonian;\n")
         f.write(f"nu              [0 2 -1 0 0 0 0] {viscosity:.6e};\n")
 
 
@@ -309,7 +313,7 @@ def _write_thermophysical_properties(filepath: Path) -> None:
         f.write("    thermo          hConst;\n")
         f.write("    equationOfState perfectGas;\n")
         f.write("    specie          specie;\n")
-        f.write("    energy          sensibleInternalEnergy;\n")
+        f.write("    energy          sensibleEnthalpy;\n")
         f.write("}\n\n")
         f.write("mixture\n{\n")
         f.write("    specie { molWeight 28.96; }\n")
@@ -470,6 +474,245 @@ def _write_turbulence_fields(
             f.write("}\n")
 
 
+def write_rhoSimpleFoam_case(
+    case_dir: str | Path,
+    mesh,
+    inlet_velocity: float = 150.0,
+    n_iterations: int = 1000,
+    total_pressure: float = 101325.0,
+    total_temperature: float = 288.15,
+    outlet_pressure: float = 101325.0,
+    turbulence_intensity: float = 0.05,
+    length_scale: float = 0.01,
+    z_thickness: float = 0.001,
+) -> Path:
+    """Write a complete, self-consistent rhoSimpleFoam (compressible) case.
+
+    For flows above Mach ~0.3, compressibility effects are significant.
+    This function sets up rhoSimpleFoam with:
+      - Ideal gas (perfectGas) equation of state
+      - Sutherland viscosity model
+      - totalPressure / totalTemperature inlet BCs
+      - k-omega SST turbulence with compressible wall functions
+      - Conservative relaxation for stability
+
+    Args:
+        case_dir: Output directory for the OpenFOAM case.
+        mesh: MultiBlockMesh to export as blockMeshDict.
+        inlet_velocity: Inlet flow velocity (m/s).
+        n_iterations: Maximum solver iterations.
+        total_pressure: Total pressure at inlet (Pa).
+        total_temperature: Total temperature at inlet (K).
+        outlet_pressure: Static pressure at outlet (Pa).
+        turbulence_intensity: Turbulence intensity fraction (e.g. 0.05 = 5%).
+        length_scale: Turbulence length scale (m).
+        z_thickness: Slab thickness for 2D extrusion (m).
+
+    Returns:
+        Path to the case directory.
+    """
+    case_dir = Path(case_dir)
+    (case_dir / "0").mkdir(parents=True, exist_ok=True)
+    (case_dir / "constant").mkdir(exist_ok=True)
+    (case_dir / "system").mkdir(exist_ok=True)
+
+    # Turbulence field values
+    Cmu = 0.09
+    k_val = max(1.5 * (turbulence_intensity * inlet_velocity) ** 2, 0.1)
+    omega_val = k_val ** 0.5 / (Cmu ** 0.25 * length_scale)
+    nut_val = k_val / max(omega_val, 1e-10)
+    alphat_val = nut_val / 0.85
+
+    # ── blockMeshDict ──
+    mesh.export_openfoam(str(case_dir / "system" / "blockMeshDict"),
+                         z_thickness=z_thickness)
+
+    # ── controlDict ──
+    write_interval = max(n_iterations // 5, 50)
+    (case_dir / "system" / "controlDict").write_text(
+        "FoamFile { version 2.0; format ascii; class dictionary; object controlDict; }\n\n"
+        "application     rhoSimpleFoam;\n"
+        "startFrom       startTime;\n"
+        "startTime       0;\n"
+        "stopAt          endTime;\n"
+        f"endTime         {n_iterations};\n"
+        "deltaT          1;\n"
+        "writeControl    timeStep;\n"
+        f"writeInterval   {write_interval};\n"
+        "purgeWrite      3;\n"
+        "writeFormat     ascii;\n"
+        "writePrecision  8;\n"
+        "writeCompression off;\n"
+        "timeFormat      general;\n"
+        "timePrecision   6;\n"
+        "runTimeModifiable true;\n"
+    )
+
+    # ── fvSchemes (compressible: additional energy/density divSchemes) ──
+    (case_dir / "system" / "fvSchemes").write_text(
+        "FoamFile { version 2.0; format ascii; class dictionary; object fvSchemes; }\n\n"
+        "ddtSchemes { default steadyState; }\n"
+        "gradSchemes\n{\n"
+        "    default         Gauss linear;\n"
+        "    grad(U)         cellLimited Gauss linear 1;\n"
+        "}\n"
+        "divSchemes\n{\n"
+        "    default         none;\n"
+        "    div(phi,U)      bounded Gauss upwind;\n"
+        "    div(phi,k)      bounded Gauss upwind;\n"
+        "    div(phi,omega)  bounded Gauss upwind;\n"
+        "    div(phi,h)      bounded Gauss upwind;\n"
+        "    div(phi,K)      bounded Gauss upwind;\n"
+        "    div(phi,Ekp)    bounded Gauss upwind;\n"
+        "    div(phid,p)     Gauss upwind;\n"
+        "    div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;\n"
+        "}\n"
+        "laplacianSchemes { default Gauss linear limited corrected 0.5; }\n"
+        "interpolationSchemes { default linear; }\n"
+        "snGradSchemes { default limited corrected 0.5; }\n"
+        "wallDist { method meshWave; }\n"
+    )
+
+    # ── fvSolution (very conservative relaxation for compressible startup) ──
+    (case_dir / "system" / "fvSolution").write_text(
+        "FoamFile { version 2.0; format ascii; class dictionary; object fvSolution; }\n\n"
+        "solvers\n{\n"
+        "    p\n    {\n"
+        "        solver          GAMG;\n"
+        "        smoother        GaussSeidel;\n"
+        "        tolerance       1e-7;\n"
+        "        relTol          0.01;\n"
+        "    }\n"
+        "    \"(U|k|omega|h)\"\n    {\n"
+        "        solver          smoothSolver;\n"
+        "        smoother        GaussSeidel;\n"
+        "        tolerance       1e-7;\n"
+        "        relTol          0.01;\n"
+        "    }\n"
+        "    \"rho.*\"\n    {\n"
+        "        solver          PCG;\n"
+        "        preconditioner  DIC;\n"
+        "        tolerance       1e-7;\n"
+        "        relTol          0.01;\n"
+        "    }\n"
+        "}\n\n"
+        "SIMPLE\n{\n"
+        "    nNonOrthogonalCorrectors 1;\n"
+        "    consistent      no;\n"
+        "    residualControl\n    {\n"
+        "        p               1e-4;\n"
+        "        U               1e-4;\n"
+        "        h               1e-4;\n"
+        "        k               1e-4;\n"
+        "        omega           1e-4;\n"
+        "    }\n"
+        "}\n\n"
+        "relaxationFactors\n{\n"
+        "    fields  { p 0.3; rho 0.5; }\n"
+        "    equations { U 0.5; h 0.5; k 0.3; omega 0.3; }\n"
+        "}\n"
+    )
+
+    # ── constant/thermophysicalProperties (sensibleEnthalpy for stability) ──
+    (case_dir / "constant" / "thermophysicalProperties").write_text(
+        "FoamFile { version 2.0; format ascii; class dictionary; object thermophysicalProperties; }\n\n"
+        "thermoType\n{\n"
+        "    type            hePsiThermo;\n"
+        "    mixture         pureMixture;\n"
+        "    transport       sutherland;\n"
+        "    thermo          hConst;\n"
+        "    equationOfState perfectGas;\n"
+        "    specie          specie;\n"
+        "    energy          sensibleEnthalpy;\n"
+        "}\n\n"
+        "mixture\n{\n"
+        "    specie      { molWeight 28.96; }\n"
+        "    thermodynamics { Cp 1005; Hf 0; }\n"
+        "    transport   { As 1.458e-06; Ts 110.4; }\n"
+        "}\n"
+    )
+
+    # ── constant/turbulenceProperties ──
+    (case_dir / "constant" / "turbulenceProperties").write_text(
+        "FoamFile { version 2.0; format ascii; class dictionary; object turbulenceProperties; }\n"
+        "simulationType RAS;\n"
+        "RAS { RASModel kOmegaSST; turbulence on; printCoeffs on; }\n"
+    )
+
+    # ── constant/MRFProperties (empty — no rotation for 2D passage) ──
+    (case_dir / "constant" / "MRFProperties").write_text(
+        "FoamFile { version 2.0; format ascii; class dictionary; object MRFProperties; }\n"
+    )
+
+    # ── 0/p (absolute pressure for rhoSimpleFoam, dimensions [1 -1 -2 0 0 0 0]) ──
+    _write_field(case_dir / "0" / "p",
+                 "volScalarField", "p", "[1 -1 -2 0 0 0 0]",
+                 f"uniform {total_pressure}",
+                 inlet=(f"totalPressure; p0 uniform {total_pressure}; "
+                        f"gamma 1.4; value uniform {total_pressure}"),
+                 outlet=f"fixedValue; value uniform {outlet_pressure}",
+                 blade="zeroGradient")
+
+    # ── 0/U (use fixedValue at inlet for stability, not pressureInletOutletVelocity) ──
+    U_str = f"({inlet_velocity} 0 0)"
+    _write_field(case_dir / "0" / "U",
+                 "volVectorField", "U", "[0 1 -1 0 0 0 0]",
+                 f"uniform {U_str}",
+                 inlet=f"fixedValue; value uniform {U_str}",
+                 outlet=f"inletOutlet; inletValue uniform (0 0 0); value uniform {U_str}",
+                 blade="noSlip")
+
+    # ── 0/T (temperature — rhoSimpleFoam reads T to initialize thermo) ──
+    _write_field(case_dir / "0" / "T",
+                 "volScalarField", "T", "[0 0 0 1 0 0 0]",
+                 f"uniform {total_temperature}",
+                 inlet=f"fixedValue; value uniform {total_temperature}",
+                 outlet=f"inletOutlet; inletValue uniform {total_temperature}; "
+                        f"value uniform {total_temperature}",
+                 blade="zeroGradient")
+
+    # ── 0/k ──
+    _write_field(case_dir / "0" / "k",
+                 "volScalarField", "k", "[0 2 -2 0 0 0 0]",
+                 f"uniform {k_val:.6e}",
+                 inlet=f"fixedValue; value uniform {k_val:.6e}",
+                 outlet=f"inletOutlet; inletValue uniform {k_val:.6e}; value uniform {k_val:.6e}",
+                 blade=f"kqRWallFunction; value uniform {k_val:.6e}")
+
+    # ── 0/omega ──
+    _write_field(case_dir / "0" / "omega",
+                 "volScalarField", "omega", "[0 0 -1 0 0 0 0]",
+                 f"uniform {omega_val:.6e}",
+                 inlet=f"fixedValue; value uniform {omega_val:.6e}",
+                 outlet=f"inletOutlet; inletValue uniform {omega_val:.6e}; value uniform {omega_val:.6e}",
+                 blade=f"omegaWallFunction; value uniform {omega_val:.6e}")
+
+    # ── 0/nut ──
+    _write_field(case_dir / "0" / "nut",
+                 "volScalarField", "nut", "[0 2 -1 0 0 0 0]",
+                 f"uniform {nut_val:.6e}",
+                 inlet=f"calculated; value uniform {nut_val:.6e}",
+                 outlet=f"calculated; value uniform {nut_val:.6e}",
+                 blade=f"nutkWallFunction; value uniform 0")
+
+    # ── 0/alphat (thermal eddy diffusivity) ──
+    _write_field(case_dir / "0" / "alphat",
+                 "volScalarField", "alphat", "[1 -1 -1 0 0 0 0]",
+                 f"uniform {alphat_val:.6e}",
+                 inlet=f"calculated; value uniform {alphat_val:.6e}",
+                 outlet=f"calculated; value uniform {alphat_val:.6e}",
+                 blade="compressible::alphatWallFunction; Prt 0.85; value uniform 0")
+
+    # ── Allrun script ──
+    (case_dir / "Allrun").write_text(
+        "#!/bin/bash\nset -e\ncd \"${0%/*}\" 2>/dev/null || true\n"
+        "blockMesh\nrhoSimpleFoam\n"
+    )
+    (case_dir / "Allrun").chmod(0o755)
+
+    return case_dir
+
+
 def write_simpleFoam_case(
     case_dir: str | Path,
     mesh,
@@ -478,6 +721,7 @@ def write_simpleFoam_case(
     nu: float = 1.47e-5,
     turbulence_intensity: float = 0.05,
     length_scale: float = 0.01,
+    z_thickness: float = 0.001,
 ) -> Path:
     """Write a complete, self-consistent simpleFoam (incompressible) case.
 
@@ -489,7 +733,10 @@ def write_simpleFoam_case(
         mesh: MultiBlockMesh to export as blockMeshDict.
         inlet_velocity: Inlet flow velocity (m/s).
         n_iterations: Maximum solver iterations.
-        nu: Kinematic viscosity (m²/s).
+        nu: Kinematic viscosity (m^2/s).
+        turbulence_intensity: Turbulence intensity fraction (e.g. 0.05 = 5%).
+        length_scale: Turbulence length scale (m).
+        z_thickness: Slab thickness for 2D extrusion (m).
         turbulence_intensity: Turbulence intensity fraction (e.g. 0.05 = 5%).
         length_scale: Turbulence length scale (m).
 
@@ -508,7 +755,8 @@ def write_simpleFoam_case(
     nut_val = k_val / max(omega_val, 1e-10)
 
     # ── blockMeshDict ──
-    mesh.export_openfoam(str(case_dir / "system" / "blockMeshDict"))
+    mesh.export_openfoam(str(case_dir / "system" / "blockMeshDict"),
+                         z_thickness=z_thickness)
 
     # ── controlDict ──
     write_interval = max(n_iterations // 5, 50)

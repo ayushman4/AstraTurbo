@@ -26,6 +26,7 @@ def write_blockmeshdict(
     patches: list[dict],
     merge_pairs: list[tuple[str, str]] | None = None,
     convert_to_meters: float = 1.0,
+    edges: list[dict] | None = None,
 ) -> None:
     """Write an OpenFOAM blockMeshDict file.
 
@@ -42,16 +43,20 @@ def write_blockmeshdict(
             - 'faces': list of [4 vertex indices] per face
         merge_pairs: Optional list of (patch1, patch2) pairs to merge.
         convert_to_meters: Scale factor for unit conversion.
+        edges: Optional list of curved edge definitions, each dict with:
+            - 'v0': start vertex index
+            - 'v1': end vertex index
+            - 'points': (N, 3) array of intermediate points
     """
     filepath = Path(filepath)
     filepath.parent.mkdir(parents=True, exist_ok=True)
 
     with open(filepath, "w") as f:
         _write_header(f)
-        f.write(f"convertToMeters {convert_to_meters:.6g};\n\n")
+        f.write(f"scale {convert_to_meters:.6g};\n\n")
         _write_vertices(f, vertices)
         _write_blocks(f, blocks)
-        _write_edges(f)
+        _write_edges(f, edges)
         _write_boundary(f, patches)
         _write_merge_pairs(f, merge_pairs)
         _write_footer(f)
@@ -93,9 +98,22 @@ def _write_blocks(f: TextIO, blocks: list[dict]) -> None:
     f.write(");\n\n")
 
 
-def _write_edges(f: TextIO) -> None:
-    """Write the edges section (empty by default, can be extended)."""
+def _write_edges(f: TextIO, edges: list[dict] | None = None) -> None:
+    """Write the edges section with optional curved (polyLine) edges.
+
+    Curved edges allow blockMesh to follow blade profiles and other
+    non-linear boundaries, rather than linearly interpolating between
+    corner vertices.
+    """
     f.write("edges\n(\n")
+    if edges:
+        for edge in edges:
+            v0, v1 = edge["v0"], edge["v1"]
+            pts = edge["points"]
+            f.write(f"    polyLine {v0} {v1}\n    (\n")
+            for pt in pts:
+                f.write(f"        ({float(pt[0]):.10g} {float(pt[1]):.10g} {float(pt[2]):.10g})\n")
+            f.write("    )\n")
     f.write(");\n\n")
 
 

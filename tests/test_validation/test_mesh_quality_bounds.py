@@ -234,3 +234,83 @@ class TestMeshQualityBounds:
         # BL thickness should be reasonable
         assert result["boundary_layer_thickness"] > 0
         assert result["boundary_layer_thickness"] < 0.05  # Less than chord
+
+    def test_validate_cfd_mesh(self) -> None:
+        """Test validate_cfd_mesh catches common issues."""
+        from astraturbo.mesh.quality import validate_cfd_mesh
+        from astraturbo.mesh.multiblock import generate_blade_passage_mesh
+        from astraturbo.camberline import NACA65
+        from astraturbo.thickness import NACA65Series
+        from astraturbo.profile import Superposition
+
+        # Generate a physically-scaled blade profile and mesh
+        prof = Superposition(NACA65(cl0=0.8), NACA65Series(max_thickness=0.10))
+        coords = prof.as_array()
+
+        pitch = 0.059
+        chord = pitch * 1.0
+        profile_scaled = coords.copy()
+        profile_scaled[:, 0] = coords[:, 0] * chord
+        profile_scaled[:, 1] = coords[:, 1] * chord
+
+        mesh = generate_blade_passage_mesh(
+            profile=profile_scaled,
+            pitch=pitch,
+            n_blade=20,
+            n_ogrid=5,
+            n_inlet=10,
+            n_outlet=10,
+            n_passage=10,
+        )
+
+        # Validate with high-speed flow (should warn about compressibility)
+        result = validate_cfd_mesh(
+            mesh, velocity=200.0, chord=chord, min_cells=100000
+        )
+
+        assert "warnings" in result
+        assert "total_cells" in result
+        assert "estimated_yplus" in result
+        assert "mach_number" in result
+        assert result["mach_number"] > 0.3
+
+        # Should have at least the Mach warning and cell count warning
+        warning_texts = " ".join(result["warnings"])
+        assert "Mach" in warning_texts or "compressible" in warning_texts.lower()
+        assert "cells" in warning_texts.lower()
+
+    def test_validate_cfd_mesh_no_warnings_for_good_mesh(self) -> None:
+        """A properly sized mesh at low speed should produce no critical warnings."""
+        from astraturbo.mesh.quality import validate_cfd_mesh
+        from astraturbo.mesh.multiblock import generate_blade_passage_mesh
+        from astraturbo.camberline import NACA65
+        from astraturbo.thickness import NACA65Series
+        from astraturbo.profile import Superposition
+
+        prof = Superposition(NACA65(cl0=0.8), NACA65Series(max_thickness=0.10))
+        coords = prof.as_array()
+
+        pitch = 0.059
+        chord = pitch * 1.0
+        profile_scaled = coords.copy()
+        profile_scaled[:, 0] = coords[:, 0] * chord
+        profile_scaled[:, 1] = coords[:, 1] * chord
+
+        mesh = generate_blade_passage_mesh(
+            profile=profile_scaled,
+            pitch=pitch,
+            n_blade=20,
+            n_ogrid=5,
+            n_inlet=10,
+            n_outlet=10,
+            n_passage=10,
+        )
+
+        # Low speed, low cell count requirement
+        result = validate_cfd_mesh(
+            mesh, velocity=50.0, chord=chord, min_cells=100
+        )
+
+        # Should have no Mach warning at 50 m/s
+        warning_texts = " ".join(result["warnings"])
+        assert "Mach" not in warning_texts

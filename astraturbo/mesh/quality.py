@@ -270,6 +270,109 @@ def auto_first_cell_height(
     }
 
 
+def validate_cfd_mesh(
+    mesh,
+    velocity: float,
+    chord: float,
+    density: float = 1.225,
+    dynamic_viscosity: float = 1.8e-5,
+    min_cells: int = 10000,
+) -> dict:
+    """Validate mesh suitability for CFD simulation.
+
+    Checks total cell count, y+ estimates, and quality metrics across all
+    blocks. Returns a summary with warnings for conditions that would
+    produce unphysical results.
+
+    Args:
+        mesh: MultiBlockMesh object with .blocks attribute.
+        velocity: Freestream velocity (m/s).
+        chord: Physical blade chord length (m).
+        density: Fluid density (kg/m^3).
+        dynamic_viscosity: Dynamic viscosity (Pa.s).
+        min_cells: Minimum acceptable total cell count.
+
+    Returns:
+        Dictionary with 'total_cells', 'estimated_yplus', 'warnings' list,
+        'ogrid_recommendation', and per-block quality summaries.
+    """
+    warnings = []
+    total_cells = mesh.total_cells
+
+    if total_cells < min_cells:
+        warnings.append(
+            f"Total cells ({total_cells}) below minimum ({min_cells}). "
+            "Results may be mesh-dependent."
+        )
+
+    # Estimate y+ from the O-grid blocks (those with 'blade' patch)
+    yplus_est = None
+    for block in mesh.blocks:
+        if "blade" in block.patches.values():
+            # First cell height ≈ distance from blade wall to first interior point
+            # In the O-grid, j=0 is blade, j=1 is first interior
+            ni, nj = block.points.shape[0], block.points.shape[1]
+            if nj >= 2:
+                wall_pts = block.points[:, 0, :]
+                first_pts = block.points[:, 1, :]
+                heights = np.linalg.norm(first_pts - wall_pts, axis=1)
+                first_cell_h = float(np.median(heights))
+                yplus_est = estimate_yplus(
+                    first_cell_h, density, velocity, dynamic_viscosity, chord
+                )
+                break
+
+    if yplus_est is not None:
+        if yplus_est < 1.0:
+            warnings.append(
+                f"Estimated y+ = {yplus_est:.2f} (< 1). Ensure wall-resolved "
+                "turbulence model or refine O-grid."
+            )
+        elif yplus_est > 300.0:
+            warnings.append(
+                f"Estimated y+ = {yplus_est:.1f} (> 300). Too coarse for wall "
+                "functions. Increase O-grid resolution."
+            )
+
+    # Check Mach number
+    speed_of_sound = 343.0  # m/s at STP
+    mach = velocity / speed_of_sound
+    if mach > 0.3:
+        warnings.append(
+            f"Mach = {mach:.2f} > 0.3. Use compressible solver (rhoSimpleFoam)."
+        )
+
+    # Check profile vs pitch scale (chord should be same order as pitch)
+    # This catches the unit-chord-in-small-passage bug
+    block_quality = []
+    for block in mesh.blocks:
+        report = mesh_quality_report(block.points)
+        block_quality.append({"name": block.name, **report})
+        if report["aspect_ratio_max"] > 1000:
+            warnings.append(
+                f"Block '{block.name}': aspect ratio {report['aspect_ratio_max']:.0f} "
+                "> 1000. Likely geometry scale mismatch."
+            )
+
+    # Compute recommended O-grid parameters
+    ogrid_rec = auto_first_cell_height(
+        velocity=velocity,
+        chord=chord,
+        density=density,
+        dynamic_viscosity=dynamic_viscosity,
+        target_yplus=30.0,
+    )
+
+    return {
+        "total_cells": total_cells,
+        "estimated_yplus": yplus_est,
+        "mach_number": mach,
+        "warnings": warnings,
+        "ogrid_recommendation": ogrid_rec,
+        "block_quality": block_quality,
+    }
+
+
 def mesh_quality_report(block: NDArray[np.float64]) -> dict:
     """Generate a summary quality report for a mesh block.
 

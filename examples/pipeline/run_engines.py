@@ -234,8 +234,15 @@ def run_engine_pipeline(name: str, spec: dict, output_dir: Path) -> dict:
 
     r_mean = (spec["r_hub"] + spec["r_tip"]) / 2.0
     pitch = 2.0 * np.pi * r_mean / 24.0
+
+    # Scale unit-chord profile to physical chord (solidity ~ 1.0)
+    chord = pitch * 1.0
+    profile_scaled = profile_coords.copy()
+    profile_scaled[:, 0] = profile_coords[:, 0] * chord
+    profile_scaled[:, 1] = profile_coords[:, 1] * chord
+
     mesh = generate_blade_passage_mesh(
-        profile=profile_coords,
+        profile=profile_scaled,
         pitch=pitch,
         n_blade=40,
         n_ogrid=10,
