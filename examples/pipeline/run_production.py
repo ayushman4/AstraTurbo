@@ -96,12 +96,105 @@ def run_production(name: str, spec: dict, output_dir: Path) -> dict:
     dt = time.perf_counter() - t1
     print(f"  [3/8] HP Turbine           ({dt:.2f}s)  {turb.n_stages} stages, ER={turb.overall_expansion_ratio:.2f}")
 
-    # ── 4. 2D Blade profile ────────────────────────────────────────
+    # ── 3b. SCM Throughflow (radial equilibrium) ──────────────────
+    t1 = time.perf_counter()
+    from astraturbo.solver.throughflow import ThroughflowSolver, ThroughflowConfig, BladeRowSpec
+    import math
+
+    n_stages = comp.n_stages
+    omega = spec["rpm"] * 2 * math.pi / 60.0
+    r_hub = spec["r_hub"]
+    r_tip = spec["r_tip"]
+
+    # Build SCM solver from meanline results
+    scm_cfg = ThroughflowConfig(
+        n_streamlines=5,
+        n_stations=3 * n_stages + 2,  # inlet + 3 per stage (in/rotor/stator) + outlet
+        max_iterations=100,
+        convergence_tolerance=1e-3,
+    )
+    scm = ThroughflowSolver(scm_cfg)
+
+    # Annulus: constant hub/tip for simplicity (from spec)
+    ns = scm_cfg.n_stations
+    scm.set_annulus(
+        hub_radius=np.full(ns, r_hub),
+        tip_radius=np.full(ns, r_tip),
+        axial_coordinates=np.linspace(0, n_stages * 0.06, ns),  # ~60mm per stage
+    )
+    scm.set_inlet_conditions(
+        total_pressure=ec_result.compressor_inlet_pressure if hasattr(ec_result, 'compressor_inlet_pressure') else 101325.0,
+        total_temperature=ec_result.compressor_inlet_temperature if hasattr(ec_result, 'compressor_inlet_temperature') else 288.15,
+        flow_angle=0.0,
+    )
+
+    # Add blade rows from meanline
+    for si, stage in enumerate(comp.stages):
+        bp = blade_params[si] if si < len(blade_params) else blade_params[-1]
+        station_base = 1 + si * 3
+
+        rotor = BladeRowSpec(
+            row_type="rotor",
+            n_blades=int(bp.get("rotor_n_blades", 24)),
+            inlet_station=station_base,
+            outlet_station=station_base + 1,
+            chord=np.full(scm_cfg.n_streamlines, bp.get("rotor_chord", 0.05)),
+            stagger=np.full(scm_cfg.n_streamlines, bp.get("rotor_stagger_deg", 30.0)),
+            camber=np.full(scm_cfg.n_streamlines, bp.get("rotor_camber_deg", 20.0)),
+            inlet_metal_angle=np.full(scm_cfg.n_streamlines, np.degrees(stage.rotor_inlet_beta)),
+            outlet_metal_angle=np.full(scm_cfg.n_streamlines, np.degrees(stage.rotor_outlet_beta)),
+            omega=omega,
+        )
+        scm.add_blade_row(rotor)
+
+        stator = BladeRowSpec(
+            row_type="stator",
+            n_blades=int(bp.get("stator_n_blades", 30)),
+            inlet_station=station_base + 1,
+            outlet_station=station_base + 2,
+            chord=np.full(scm_cfg.n_streamlines, bp.get("stator_chord", 0.04)),
+            stagger=np.full(scm_cfg.n_streamlines, bp.get("stator_stagger_deg", 20.0)),
+            camber=np.full(scm_cfg.n_streamlines, bp.get("stator_camber_deg", 15.0)),
+            inlet_metal_angle=np.full(scm_cfg.n_streamlines, np.degrees(stage.stator_inlet_alpha) if hasattr(stage, 'stator_inlet_alpha') else 30.0),
+            outlet_metal_angle=np.full(scm_cfg.n_streamlines, 0.0),
+        )
+        scm.add_blade_row(stator)
+
+    scm_result = scm.solve()
+    dt = time.perf_counter() - t1
+
+    # Extract SCM-corrected first-stage parameters for blade profile
+    scm_converged = scm_result.converged
+    scm_iters = scm_result.n_iterations
+    scm_losses = scm_result.row_losses[0] if scm_result.row_losses else {}
+    scm_df = scm_losses.get("diffusion_factor_mean", 0.4)
+    scm_total_loss = scm_losses.get("total_loss_mean", 0.05)
+
+    print(f"  [3b]  SCM Throughflow       ({dt:.2f}s)  {'CONVERGED' if scm_converged else 'NOT CONVERGED'} ({scm_iters} iters)")
+    if scm_losses:
+        print(f"        First rotor: DF={scm_df:.3f}, total_loss={scm_total_loss:.4f}")
+    if scm_result.mach_number is not None:
+        mach_max = float(np.max(scm_result.mach_number))
+        print(f"        Max Mach: {mach_max:.3f}")
+
+    # ── 4. 2D Blade profile (using SCM-corrected blade angles) ────
     from astraturbo.camberline import NACA65
     from astraturbo.thickness import NACA65Series
     from astraturbo.profile import Superposition
+    from astraturbo.design.meanline import blade_angle_to_cl0
 
-    cl0 = max(0.3, min(blade_params[0]["rotor_camber_deg"] / 25.0, 1.8)) if blade_params else 0.8
+    # Use SCM first-stage rotor angles for cl0 computation
+    if blade_params:
+        bp0 = blade_params[0]
+        stage0 = comp.stages[0]
+        cl0 = blade_angle_to_cl0(
+            stage0.rotor_inlet_beta,
+            stage0.rotor_outlet_beta,
+            bp0.get("rotor_solidity", 1.0),
+        )
+        cl0 = max(0.3, min(cl0, 1.8))
+    else:
+        cl0 = 0.8
     prof = Superposition(NACA65(cl0=cl0), NACA65Series(max_thickness=0.10))
     profile_coords = prof.as_array()
     np.savetxt(str(output_dir / f"{name}_blade.csv"), profile_coords, delimiter=",", header="x,y", comments="")
