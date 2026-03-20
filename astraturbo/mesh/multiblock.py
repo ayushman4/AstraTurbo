@@ -413,32 +413,23 @@ class MultiBlockMesh:
         all_blocks = []
         for bi, (vidxs, bname) in enumerate(block_defs):
             v0, v1, v2, v3 = vidxs
-            ni_cells, nj_cells, gi, gj = block_cells[bi]
+            ni_cells, nj_cells, eg = block_cells[bi]
 
-            # Check if block needs flipping (CW → CCW for OpenFOAM).
-            p = [verts_2d[v0], verts_2d[v1], verts_2d[v2], verts_2d[v3]]
-            signed_area = sum(
-                p[k][0] * p[(k+1)%4][1] - p[(k+1)%4][0] * p[k][1]
-                for k in range(4)
-            ) * 0.5
+            # v1's vertex ordering is CW (3D cylindrical). For 2D z-extrusion,
+            # OpenFOAM needs CCW bottom face. Reverse: [v0,v3,v2,v1,...].
+            # This swaps the hex i↔j directions, so also swap:
+            #   - cell counts: ni↔nj
+            #   - edgeGrading: edges 0-3 (i) ↔ edges 4-7 (j)
+            hex_verts = [v0, v3, v2, v1, v0+nv, v3+nv, v2+nv, v1+nv]
+            cells_reversed = [nj_cells, ni_cells, 1]
+            eg_reversed = eg[4:8] + eg[0:4] + eg[8:12]  # swap i↔j edges
 
-            if signed_area >= 0:
-                # Already CCW -- no flip needed
-                hex_verts = [v0, v1, v2, v3, v0+nv, v1+nv, v2+nv, v3+nv]
-                cell_counts = [ni_cells, nj_cells, 1]
-                grading_vals = [gi, gj, 1]
-            else:
-                # CW -- flip to CCW by reversing: v0, v3, v2, v1
-                hex_verts = [v0, v3, v2, v1, v0+nv, v3+nv, v2+nv, v1+nv]
-                # Flipping swaps i↔j directions, so swap cell counts and grading
-                cell_counts = [nj_cells, ni_cells, 1]
-                grading_vals = [gj, gi, 1]
+            eg_str = "edgeGrading (" + " ".join(f"{g:.15g}" for g in eg_reversed) + ")"
 
             all_blocks.append({
                 "vertices": hex_verts,
-                "cells": cell_counts,
-                "grading": grading_vals,
-                "_flipped": signed_area < 0,  # track for face mapping
+                "cells": cells_reversed,
+                "grading": eg_str,
             })
 
         # ── Patch definitions ──
@@ -454,38 +445,25 @@ class MultiBlockMesh:
 
         for bi, (vidxs, bname) in enumerate(block_defs):
             v0, v1, v2, v3 = vidxs
-            flipped = all_blocks[bi].get("_flipped", False)
+
+            # Reversed hex: [v0,v3,v2,v1,...]. The i↔j swap means:
+            # hex "bottom" (fv0→fv1 = v0→v3) = original "left"
+            # hex "top" (fv3→fv2 = v1→v2) = original "right"
+            # hex "left" (fv0→fv3 = v0→v1) = original "bottom"
+            # hex "right" (fv1→fv2 = v3→v2) = original "top"
 
             # z-faces
-            if flipped:
-                patch_map["frontAndBack"]["faces"].append([v0, v1, v2, v3])
-                patch_map["frontAndBack"]["faces"].append(
-                    [v0+nv, v3+nv, v2+nv, v1+nv])
-            else:
-                patch_map["frontAndBack"]["faces"].append([v0, v3, v2, v1])
-                patch_map["frontAndBack"]["faces"].append(
-                    [v0+nv, v1+nv, v2+nv, v3+nv])
+            patch_map["frontAndBack"]["faces"].append([v0, v1, v2, v3])
+            patch_map["frontAndBack"]["faces"].append(
+                [v0+nv, v3+nv, v2+nv, v1+nv])
 
-            if flipped:
-                # Flipped hex: [v0,v3,v2,v1]. Face mapping:
-                # original "bottom" (v0→v1) → hex edge fv0→fv3 = face_left in hex
-                # original "top" (v3→v2) → hex edge fv1→fv2 = face_right in hex
-                # original "left" (v0→v3) → hex edge fv0→fv1 = face_bottom in hex
-                # original "right" (v1→v2) → hex edge fv3→fv2 = face_top in hex
-                face_defs = {
-                    "bottom": [v0, v0+nv, v1+nv, v1],   # v0→v1 (original bottom)
-                    "top": [v3, v2, v2+nv, v3+nv],       # v3→v2 (original top)
-                    "left": [v0, v3, v3+nv, v0+nv],      # v0→v3 (original left)
-                    "right": [v1, v1+nv, v2+nv, v2],     # v1→v2 (original right)
-                }
-            else:
-                # Normal hex: [v0,v1,v2,v3]. Direct mapping.
-                face_defs = {
-                    "bottom": [v0, v1, v1+nv, v0+nv],
-                    "top": [v3, v3+nv, v2+nv, v2],
-                    "left": [v0, v0+nv, v3+nv, v3],
-                    "right": [v1, v2, v2+nv, v1+nv],
-                }
+            # Map ORIGINAL face labels to REVERSED hex faces
+            face_defs = {
+                "bottom": [v0, v0+nv, v1+nv, v1],   # v0→v1 (original bottom → hex left)
+                "top":    [v3, v2, v2+nv, v3+nv],    # v3→v2 (original top → hex right)
+                "left":   [v0, v3, v3+nv, v0+nv],    # v0→v3 (original left → hex bottom)
+                "right":  [v1, v1+nv, v2+nv, v2],    # v1→v2 (original right → hex top)
+            }
 
             for face_name, boundary_name in block_patches[bi].items():
                 if face_name in face_defs:
@@ -1070,7 +1048,10 @@ def generate_blade_passage_mesh(
     verts[24] = [x_outlet, v20[1]]    # match O-grid TE pressure y
     verts[25] = [x_outlet, y_lower]
 
-    # ── 16 block definitions (vertex index quads for bottom face of hex) ──
+    # ── 16 block definitions ──
+    # Uses v1's EXACT vertex ordering (lines 604-619 of blockMeshDictGen.py).
+    # v1 writes these directly to blockMeshDict as hex vertex indices.
+    # The edgeGrading (lines 661-676) is computed for this ordering.
     block_defs = [
         # Inlet blocks (3)
         ([0, 4, 5, 1],   "inlet_upper"),       # 0
@@ -1078,15 +1059,15 @@ def generate_blade_passage_mesh(
         ([2, 8, 9, 3],   "inlet_lower"),        # 2
         # LE-to-midchord (5)
         ([4, 10, 11, 5],  "passage_upper_le"),  # 3
-        ([5, 11, 12, 6],  "ogrid_suction_le"),  # 4  blade at bottom
-        ([5, 6, 7, 8],    "ogrid_le_cap"),       # 5  blade at 6-7 edge
-        ([7, 13, 14, 8],  "ogrid_pressure_le"),  # 6  blade at bottom (7 side)
+        ([5, 11, 12, 6],  "ogrid_suction_le"),  # 4
+        ([5, 6, 7, 8],    "ogrid_le_cap"),       # 5
+        ([7, 13, 14, 8],  "ogrid_pressure_le"),  # 6
         ([8, 14, 15, 9],  "passage_lower_le"),  # 7
         # Midchord-to-TE (5)
         ([10, 16, 17, 11], "passage_upper_te"),  # 8
-        ([11, 17, 18, 12], "ogrid_suction_te"),  # 9  blade at bottom
-        ([17, 18, 19, 20], "ogrid_te_cap"),       # 10 ogrid-ss → blade-ss → blade-ps → ogrid-ps (same as LE cap pattern)
-        ([13, 19, 20, 14], "ogrid_pressure_te"),  # 11 blade at bottom (13 side)
+        ([11, 17, 18, 12], "ogrid_suction_te"),  # 9
+        ([18, 17, 20, 19], "ogrid_te_cap"),       # 10 (v1 line 614)
+        ([13, 19, 20, 14], "ogrid_pressure_te"),  # 11
         ([14, 20, 21, 15], "passage_lower_te"),  # 12
         # Outlet blocks (3)
         ([16, 22, 23, 17], "outlet_upper"),      # 13
@@ -1111,51 +1092,95 @@ def generate_blade_passage_mesh(
     g_og = grading_ogrid    # O-grid wall-normal (blade→outer)
     g_og_inv = 1.0 / grading_ogrid if grading_ogrid > 1e-10 else 1.0
 
-    block_cells = [
-        # (n_i, n_j, grading_i, grading_j)
-        # Grading is set to 1.0 (uniform) because simpleGrading cannot
-        # consistently handle the i↔j swap from winding flips across
-        # shared faces. The v1 BladeDesigner uses edgeGrading (12 values
-        # per hex) which avoids this issue. TODO: port v1 edgeGrading.
-        (n_inlet,  n_pw,      1.0, 1.0),           # 0: inlet upper
-        (n_inlet,  n_ogrid,   1.0, 1.0),           # 1: inlet middle
-        (n_inlet,  n_pw,      1.0, 1.0),           # 2: inlet lower
-        (n_half,   n_pw,      1.0, 1.0),           # 3: passage upper LE
-        (n_half,   n_ogrid,   1.0, 1.0),           # 4: O-grid suction LE
-        (n_le_cap, n_ogrid,   1.0, 1.0),           # 5: O-grid LE cap
-        (n_half,   n_ogrid,   1.0, 1.0),           # 6: O-grid pressure LE
-        (n_half,   n_pw,      1.0, 1.0),           # 7: passage lower LE
-        (n_half,   n_pw,      1.0, 1.0),           # 8: passage upper TE
-        (n_half,   n_ogrid,   1.0, 1.0),           # 9: O-grid suction TE
-        (n_le_cap, n_ogrid,   1.0, 1.0),           # 10: O-grid TE cap
-        (n_half,   n_ogrid,   1.0, 1.0),           # 11: O-grid pressure TE
-        (n_half,   n_pw,      1.0, 1.0),           # 12: passage lower TE
-        (n_outlet, n_pw,      1.0, 1.0),           # 13: outlet upper
-        (n_outlet, n_ogrid,   1.0, 1.0),           # 14: outlet middle
-        (n_outlet, n_pw,      1.0, 1.0),           # 15: outlet lower
-    ]
+    # ── Cell counts and grading for each block ──
+    # Ported from BladeDesigner v1 computeBlockDataO10H() lines 630-676.
+    # Grading follows v1 convention:
+    #   i-direction: axial (inlet/outlet grading) or O-grid wall-normal
+    #   j-direction: circumferential (passage) or O-grid wall-normal
+    # The winding flip in export swaps i↔j automatically.
+    n_half = n_blade
+    n_pw = n_passage
+    n_le_cap = max(n_ogrid, 4)
 
-    # ── Patch assignments ──
-    # Computed from vertex positions: edge (va,vb) belongs to a boundary
-    # if both vertices are in the boundary vertex set.
-    # Keys: "bottom"=v0→v1, "top"=v3→v2, "left"=v0→v3, "right"=v1→v2
+    # ── edgeGrading arrays (ported from v1 lines 568-676) ──
+    g_og = grading_ogrid
+    g_in = grading_inlet
+    g_out = grading_outlet
+
+    # axGrading: 16 values (simple mode fills 4 regions)
+    ax = np.ones(16)
+    ax[0:3] = g_in       # inlet
+    ax[13:16] = g_out    # outlet
+
+    # circGrading: 16 values (all 1.0 for uniform pitchwise)
+    circ = np.ones(16)
+
+    # oGridGrading: 6 values (all = grading_ogrid)
+    og = np.full(6, g_og)
+
+    # Cell counts per block (v1 lines 630-645)
+    # edgeGrading per block (v1 lines 661-676, 2D single-layer: both layers same)
+    block_cells = []
+    block_cells_ni_nj = [
+        (n_inlet,  n_pw),      # 0
+        (n_inlet,  n_ogrid),   # 1
+        (n_inlet,  n_pw),      # 2
+        (n_half,   n_pw),      # 3
+        (n_half,   n_ogrid),   # 4
+        (n_ogrid,  n_le_cap),  # 5
+        (n_half,   n_ogrid),   # 6
+        (n_half,   n_pw),      # 7
+        (n_half,   n_pw),      # 8
+        (n_half,   n_ogrid),   # 9
+        (n_ogrid,  n_le_cap),  # 10
+        (n_half,   n_ogrid),   # 11
+        (n_half,   n_pw),      # 12
+        (n_outlet, n_pw),      # 13
+        (n_outlet, n_ogrid),   # 14
+        (n_outlet, n_pw),      # 15
+    ]
+    block_grading = [
+        [ax[0],ax[1],ax[1],ax[0],  circ[0],circ[1],circ[1],circ[0],  1,1,1,1],     # 0
+        [ax[1],ax[2],ax[2],ax[1],  circ[5],circ[6],circ[6],circ[5],  1,1,1,1],     # 1
+        [ax[2],ax[0],ax[0],ax[2],  circ[11],circ[12],circ[12],circ[11], 1,1,1,1],  # 2
+        [ax[3],ax[4],ax[4],ax[3],  circ[1],circ[2],circ[2],circ[1],  1,1,1,1],     # 3
+        [ax[4],ax[5],ax[5],ax[4],  og[0],og[1],og[1],og[0],          1,1,1,1],     # 4
+        [og[0],og[5],og[5],og[0],  circ[6],circ[7],circ[7],circ[6],  1,1,1,1],     # 5
+        [ax[6],ax[7],ax[7],ax[6],  1/og[5],1/og[4],1/og[4],1/og[5],  1,1,1,1],     # 6
+        [ax[7],ax[3],ax[3],ax[7],  circ[12],circ[13],circ[13],circ[12], 1,1,1,1],  # 7
+        [ax[8],ax[9],ax[9],ax[8],  circ[2],circ[3],circ[3],circ[2],  1,1,1,1],     # 8
+        [ax[9],ax[10],ax[10],ax[9], og[1],og[2],og[2],og[1],         1,1,1,1],     # 9
+        [1/og[2],1/og[3],1/og[3],1/og[2], circ[8],circ[9],circ[9],circ[8], 1,1,1,1], # 10
+        [ax[11],ax[12],ax[12],ax[11], 1/og[4],1/og[3],1/og[3],1/og[4], 1,1,1,1],  # 11
+        [ax[12],ax[8],ax[8],ax[12], circ[13],circ[14],circ[14],circ[13], 1,1,1,1], # 12
+        [ax[13],ax[14],ax[14],ax[13], circ[3],circ[4],circ[4],circ[3], 1,1,1,1],   # 13
+        [ax[14],ax[15],ax[15],ax[14], circ[9],circ[10],circ[10],circ[9], 1,1,1,1], # 14
+        [ax[15],ax[13],ax[13],ax[15], circ[14],circ[15],circ[15],circ[14], 1,1,1,1], # 15
+    ]
+    for i in range(16):
+        ni, nj = block_cells_ni_nj[i]
+        eg = block_grading[i]
+        block_cells.append((ni, nj, eg))
+
+    # ── Patch assignments (for v1's vertex ordering) ──
+    # Computed from vertex geometry: edge (va,vb) on boundary → patch name
     block_patches = [
-        {"bottom": "periodic_upper", "left": "inlet"},  # 0: inlet_upper
-        {"left": "inlet"},                                # 1: inlet_middle
-        {"top": "periodic_lower", "left": "inlet"},      # 2: inlet_lower
-        {"bottom": "periodic_upper"},                     # 3: passage_upper_le
-        {"top": "blade"},                                 # 4: ogrid_suction_le
-        {"right": "blade"},                               # 5: ogrid_le_cap
-        {"bottom": "blade"},                              # 6: ogrid_pressure_le
-        {"top": "periodic_lower"},                        # 7: passage_lower_le
-        {"bottom": "periodic_upper"},                     # 8: passage_upper_te
-        {"top": "blade"},                                 # 9: ogrid_suction_te
-        {"right": "blade"},                               # 10: ogrid_te_cap
-        {"bottom": "blade"},                              # 11: ogrid_pressure_te
-        {"top": "periodic_lower"},                        # 12: passage_lower_te
-        {"bottom": "periodic_upper", "right": "outlet"}, # 13: outlet_upper
-        {"right": "outlet"},                              # 14: outlet_middle
-        {"top": "periodic_lower", "right": "outlet"},    # 15: outlet_lower
+        {"bottom": "periodic_upper", "left": "inlet"},    # 0
+        {"left": "inlet"},                                  # 1
+        {"top": "periodic_lower", "left": "inlet"},        # 2
+        {"bottom": "periodic_upper"},                       # 3
+        {"top": "blade"},                                   # 4
+        {"right": "blade"},                                 # 5
+        {"bottom": "blade"},                                # 6
+        {"top": "periodic_lower"},                          # 7
+        {"bottom": "periodic_upper"},                       # 8
+        {"top": "blade"},                                   # 9
+        {"left": "blade"},                                  # 10
+        {"bottom": "blade"},                                # 11
+        {"top": "periodic_lower"},                          # 12
+        {"bottom": "periodic_upper", "right": "outlet"},   # 13
+        {"right": "outlet"},                                # 14
+        {"top": "periodic_lower", "right": "outlet"},      # 15
     ]
 
     # ── Build TFI blocks for quality metrics / CGNS export ──
@@ -1199,7 +1224,7 @@ def generate_blade_passage_mesh(
     mesh = MultiBlockMesh()
 
     for bi, (vidxs, bname) in enumerate(block_defs):
-        ni_cells, nj_cells, gi, gj = block_cells[bi]
+        ni_cells, nj_cells, _eg = block_cells[bi]
         v0, v1, v2, v3 = [verts[k] for k in vidxs]
 
         # Default: linear edges
@@ -1286,8 +1311,8 @@ def generate_blade_passage_mesh(
             points=points,
             n_cells_i=ni_cells,
             n_cells_j=nj_cells,
-            grading_i=gi,
-            grading_j=gj,
+            grading_i=1.0,
+            grading_j=1.0,
             patches=block_patches[bi],
         )
         mesh.blocks.append(block)
@@ -1312,6 +1337,12 @@ def generate_blade_passage_mesh(
             "le_cap_ogrid": le_cap_ogrid_pts,
             "te_cap_profile": te_cap_profile_pts,
             "te_cap_ogrid": te_cap_ogrid_pts,
+        },
+        "grading": {
+            "ogrid": grading_ogrid,
+            "ogrid_inv": g_og_inv,
+            "inlet": grading_inlet,
+            "outlet": grading_outlet,
         },
     }
 
